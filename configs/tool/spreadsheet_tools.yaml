@@ -1,0 +1,238 @@
+tools:
+  - class_name: "verl.tools.inspect_range.InspectRangeTool"
+    config:
+      max_cells: 400
+      max_response_chars: 8192
+      max_file_mb: 100
+      type: native
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "inspect_range"
+        description: "Inspect an A1 range in a workbook. Returns per-cell address/value/formula; can optionally include formatting + sheet metadata."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            range:
+              type: "string"
+              description: "A1 range to inspect (e.g. A1:C3 or Sheet1!B2:D10)."
+            include_details:
+              type: "boolean"
+              description: "If true, include formatting and overlapping sheet metadata (merged cells, conditional formatting, validations, etc.). Default false."
+          required: ["range"]
+
+  - class_name: "verl.tools.find_cells.FindCellsTool"
+    config:
+      max_file_size_mb: 100
+      type: native
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "find_cells"
+        description: "Find cells in a worksheet's used range (or a provided range) matching text in values/formulas. Returns addresses for matches."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Worksheet name to search within."
+            query:
+              type: "string"
+              description: "Text (or regex) to search for. Regex mode supports a restricted subset to reduce ReDoS risk (no groups/alternation/+/?/{m,n})."
+            match:
+              type: "string"
+              description: "Match mode: contains|equals|prefix|regex. Default contains."
+            search_in:
+              type: "string"
+              description: "Search in: values|formulas|both. Default values."
+            case_sensitive:
+              type: "boolean"
+              description: "Whether matching is case-sensitive. Default false."
+            return:
+              type: "string"
+              description: "Return mode: first|all. Default first."
+            max_results:
+              type: "integer"
+              description: "Max matches to return when return=all. Default 20."
+            range:
+              type: "string"
+              description: "Optional A1 range to restrict the search (e.g. A1:Z200). Defaults to the sheet used range."
+          required: ["sheet_name", "query"]
+
+  - class_name: "verl.tools.formula_fill.FillFormulaTool"
+    config:
+      type: native
+      max_file_size_mb: 100
+      max_fill_cells: 300000
+      max_formula_template_chars: 8192
+      lock_timeout_s: 30
+      recalc_url: "${oc.env:SPREADSHEET_RL_RECALC_URL,http://127.0.0.1:5000/recalculate}"
+      recalc_timeout_s: 180
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "fill_formula"
+        description: "Fill a formula over a rectangular range anchored at start_cell (end_row/end_col inclusive). To fill down a column, set end_row and omit end_col; to fill right across a row, set end_col and omit end_row. Use only when the target cells themselves should contain formulas; do not use for formatting (including conditional formatting), sorting/filtering, copying/extracting rows, or structural edits. The workbook is only overwritten after successful Excel recalculation; on failure it returns status=error and leaves the workbook unchanged. Skips merged-cell placeholders and reports skipped_merged_cells. Returns sample cells with address/formula/value."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Optional worksheet name."
+            start_cell:
+              type: "string"
+              description: "Start cell A1 reference (e.g. D2 or Sheet1!D2). If it does not include a sheet name, uses sheet_name (or the first worksheet by default)."
+            end_row:
+              type: "integer"
+              description: "Last row (inclusive) to fill to. If omitted, uses start_cell row."
+            end_col:
+              type: "string"
+              description: "Last column letter (inclusive) to fill to (e.g. H or AB). If omitted, uses start_cell column."
+            formula_template:
+              type: "string"
+              description: "Formula to place in start_cell (e.g. =B2+C2). Relative references are translated per row and column."
+          required: ["start_cell", "formula_template"]
+
+  - class_name: "verl.tools.clear_range.ClearRangeTool"
+    config:
+      type: native
+      max_file_size_mb: 100
+      lock_timeout_s: 30
+      max_iter_cells: 50000
+      max_scan_cells: 500000
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "clear_range"
+        description: "Clear (set to empty) cell contents (values and formulas) within an A1 range and save the workbook. Use only when the desired end state is blank cells; this does NOT delete rows/columns or shift cells. For delete/remove/shift-up/compact/no-gaps tasks use delete_rows/delete_columns instead. cleared_cells counts how many existing cells were changed. Supports cell/rectangle/whole-row/whole-column A1 ranges. Clears merged anchors when a merged region intersects. Returns sample cells with address/formula/value."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Optional worksheet name. If range includes a sheet name, it must match sheet_name."
+            range:
+              type: "string"
+              description: "A1 range to clear (e.g. A1:C3, Sheet1!B2:D10, Sheet1!B:B, or Sheet1!2:3)."
+          required: ["range"]
+
+  - class_name: "verl.tools.delete_rows_columns.DeleteRowsTool"
+    config:
+      type: native
+      max_file_size_mb: 100
+      lock_timeout_s: 30
+      max_delete_rows: 10000
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "delete_rows"
+        description: "Delete rows in a worksheet (shifts cells up; may change references). Use for delete/remove/shift-up/compact/no-gaps tasks. Not for blanking cells (use clear_range)."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Optional worksheet name. If rows includes a sheet name, it must match sheet_name."
+            rows:
+              type: "array"
+              description: "List of row ranges to delete (e.g. ['2:3'], ['3', '5', '7:9'], or ['Sheet1!5:10']). Use a single-item list for one range."
+              items:
+                type: "string"
+          required: ["rows"]
+
+  - class_name: "verl.tools.delete_rows_columns.DeleteColumnsTool"
+    config:
+      type: native
+      max_file_size_mb: 100
+      lock_timeout_s: 30
+      max_delete_cols: 1000
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "delete_columns"
+        description: "Delete columns in a worksheet (shifts cells left; may change references). Use for delete/remove/shift-left/compact/no-gaps tasks. Not for blanking cells (use clear_range)."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Optional worksheet name. If columns includes a sheet name, it must match sheet_name."
+            columns:
+              type: "array"
+              description: "List of column ranges to delete (e.g. ['B:D'], ['B', 'D', 'F:G'], or ['Sheet1!A:C']). Use a single-item list for one range."
+              items:
+                type: "string"
+          required: ["columns"]
+
+  - class_name: "verl.tools.recalculate.RecalculateAndReadTool"
+    config:
+      recalc_url: "${oc.env:SPREADSHEET_RL_RECALC_URL,http://127.0.0.1:5000/recalculate}"
+      timeout_s: 180
+      max_file_size_mb: 100
+      type: native
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "recalculate_and_read"
+        description: "Recalculate a workbook in Excel (remote service), attempt to overwrite the workbook file, and return values preserving the requested shape. Returns updated/values_source (and writeback_error on failure). Small ranges return top_left + addresses + values matrices; large ranges are sampled as cells with addresses."
+        parameters:
+          type: "object"
+          properties:
+            path:
+              type: "string"
+              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            cell_ranges:
+              type: "array"
+              description: "List of A1 cell ranges to read from the recalculated workbook (e.g. ['A1', 'Sheet1!B2:C3'])."
+              items:
+                type: "string"
+          required: ["cell_ranges"]
+
+  - class_name: "verl.tools.sandbox_fusion_tools.SandboxFusionTool"
+    config:
+      # Prefer an environment-provided endpoint (e.g. set by SLURM), fallback to the public template URL.
+      sandbox_fusion_url: "${oc.env:SANDBOX_FUSION_URL,http://127.0.0.1:8080/run_code}"
+      num_workers: 4
+      enable_global_rate_limit: false
+      default_timeout: 120
+      default_language: "python"
+      memory_limit_mb: 1024
+      type: native
+
+    tool_schema:
+      type: "function"
+      function:
+        name: "code_interpreter"
+        description: "Execute Python code (fresh process each call)."
+        parameters:
+          type: "object"
+          properties:
+            code:
+              type: "string"
+              description: "Python code to execute."
+          required: ["code"]

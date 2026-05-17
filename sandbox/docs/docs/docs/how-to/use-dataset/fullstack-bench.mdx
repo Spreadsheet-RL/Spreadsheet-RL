@@ -1,0 +1,17 @@
+---
+sidebar_position: 1
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# FullStack Bench
+
+This is the official implementation of [FullStack Bench](https://github.com/bytedance/FullStackBench).
+
+<DatasetSelector datasetKey="FullStackBench" generateDocFunc={docWithType} configFields={[
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  compile_timeout: 50,
+  run_timeout: 50,
+}} />

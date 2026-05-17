@@ -1,0 +1,21 @@
+---
+sidebar_position: 2
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# HumanEval
+
+This is the original [HumanEval](https://github.com/openai/human-eval) dataset. To test the dataset on instruction finetuned models, we also provided a freeform mode.
+
+<DatasetSelector datasetKey="HumanEval" generateDocFunc={docWithType} configFields={[
+  { name: 'extra.is_freeform', type: 'boolean', description: 'Use freeform mode for instruction finetuned models' },
+  { name: 'locale', type: 'select', description: 'Locale of freeform prompts' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  locale: 'en',
+  run_timeout: 20,
+  extra: {
+    is_freeform: false
+  }
+}} />

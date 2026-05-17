@@ -1,0 +1,36 @@
+{
+  "name": "coderunner",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "FORCE_COLOR=0 jest"
+  },
+  "jest": {
+    "maxWorkers": 2,
+    "testResultsProcessor": "jest-json-reporter"
+  },
+  "jestJsonReporter": {
+    "outputFile": "jest-report.json"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@babel/core": "^7.24.5",
+    "@babel/preset-env": "^7.24.5",
+    "@babel/preset-typescript": "^7.24.1",
+    "@jest/globals": "^29.7.0",
+    "@testing-library/dom": "^10.1.0",
+    "@testing-library/jest-dom": "^6.4.5",
+    "babel-jest": "^29.7.0",
+    "commander": "^12.1.0",
+    "jest": "^29.7.0",
+    "jest-json-reporter": "^1.2.2",
+    "js-md5": "^0.7.3",
+    "jsdom": "^24.1.0",
+    "lodash": "^4.17.21",
+    "puppeteer": "^22.9.0",
+    "random-seed": "^0.3.0",
+    "seedrandom": "^3.0.5"
+  }
+}

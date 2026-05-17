@@ -1,0 +1,17 @@
+---
+sidebar_position: 8
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# LeetCode
+
+This is a small sample of LeetCode problems, demonstrating how you can test LeetCode problems on the Sandbox. Users need to collect more data themselves.
+
+<DatasetSelector datasetKey="AutoEval" generateDocFunc={docWithType} configFields={[
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  compile_timeout: 40,
+  run_timeout: 20,
+}} />

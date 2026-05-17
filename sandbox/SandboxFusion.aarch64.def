@@ -1,0 +1,123 @@
+Bootstrap: docker
+From: ubuntu:24.04
+
+%labels
+  org.opencontainers.image.title SandboxFusion
+  org.opencontainers.image.description "SandboxFusion server (aarch64) for local code execution via /run_code"
+
+%environment
+  # Prefer the bundled conda Python.
+  export PATH="/opt/conda/bin:${PATH}"
+  # Use the lightweight HPC config by default (no dataset registry/DB cache).
+  export SANDBOX_CONFIG="${SANDBOX_CONFIG:-hpc}"
+  # Avoid jemalloc trying to spawn background threads on thread-constrained HPC nodes.
+  # (This otherwise shows up as: "<jemalloc>: arena 0 background thread creation failed (11)".)
+  export MALLOC_CONF="${MALLOC_CONF:-background_thread:false}"
+  # Keep uvicorn defaults configurable at runtime.
+  export SANDBOX_FUSION_HOST="${SANDBOX_FUSION_HOST:-127.0.0.1}"
+  export SANDBOX_FUSION_PORT="${SANDBOX_FUSION_PORT:-8080}"
+  # Avoid OpenBLAS/OMP trying to spawn lots of threads (common on HPC with pids limits).
+  export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+  export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+  export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+  export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"
+  export BLIS_NUM_THREADS="${BLIS_NUM_THREADS:-1}"
+  # Ensure consistent locale.
+  export LC_ALL=C.UTF-8
+  export LANG=C.UTF-8
+
+%files
+  sandbox /opt/sandboxfusion/sandbox
+  runtime /opt/sandboxfusion/runtime
+  scripts /opt/sandboxfusion/scripts
+  pyproject.toml /opt/sandboxfusion/pyproject.toml
+  poetry.lock /opt/sandboxfusion/poetry.lock
+  README.md /opt/sandboxfusion/README.md
+  LICENSE /opt/sandboxfusion/LICENSE
+
+%post
+  set -eu
+  export DEBIAN_FRONTEND=noninteractive
+
+  apt-get update
+  apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    curl \
+    git \
+    make \
+    build-essential \
+    bzip2 \
+    tzdata
+  rm -rf /var/lib/apt/lists/*
+
+  # Install Miniforge (aarch64) to /opt/conda.
+  MINIFORGE_URL="https://github.com/conda-forge/miniforge/releases/latest/download/Miniforge3-Linux-aarch64.sh"
+  curl -fsSL "$MINIFORGE_URL" -o /tmp/miniforge.sh
+  bash /tmp/miniforge.sh -b -p /opt/conda
+  rm -f /tmp/miniforge.sh
+
+  export PATH="/opt/conda/bin:${PATH}"
+  conda config --set channel_priority strict
+  conda config --add channels conda-forge
+
+  # Base (server) environment: install a modern Python and the SandboxFusion server deps.
+  conda install -y python=3.11 pip
+  python -m pip install --no-cache-dir --upgrade pip
+  python -m pip install --no-cache-dir \
+    "pydantic>=2.4.0,<2.7.0" \
+    "fastapi==0.103.1" \
+    "uvicorn==0.25.0" \
+    "structlog==23.1.0" \
+    "psutil==5.9.8" \
+    "aiofiles==23.2.1" \
+    "aiohttp==3.9.5" \
+    "tenacity==8.4.2" \
+    "databases[aiomysql,aiosqlite]==0.9.0" \
+    "PyYAML==6.0.1"
+
+  # Runtime env used by the python runner (kept minimal for aarch64 HPC builds).
+  conda create -y -n sandbox-runtime python=3.10 pip
+  conda run -n sandbox-runtime python -m pip install --no-cache-dir --upgrade pip
+  conda run -n sandbox-runtime python -m pip install --no-cache-dir "numpy==1.26.4" "requests==2.31.0" "openpyxl==3.1.2" "pandas==2.2.0" "pyarrow==10.0.1"
+
+  # Reduce image size.
+  conda clean -afy
+
+  # Create expected runtime dirs.
+  mkdir -p /opt/sandboxfusion/docs/build /opt/sandboxfusion/data
+
+  # Make the install readable/executable for non-root runtime users (common on HPC).
+  chmod -R a+rX /opt/conda
+  chmod -R a+rX /opt/sandboxfusion
+
+%runscript
+  set -eu
+  export PATH="/opt/conda/bin:${PATH}"
+  export SANDBOX_CONFIG="${SANDBOX_CONFIG:-hpc}"
+  HOST="${SANDBOX_FUSION_HOST:-127.0.0.1}"
+  PORT="${SANDBOX_FUSION_PORT:-8080}"
+  export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+  export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+  export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+  export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"
+  export BLIS_NUM_THREADS="${BLIS_NUM_THREADS:-1}"
+  cd /opt/sandboxfusion
+  exec python -m uvicorn sandbox.server.server:app --host "${HOST}" --port "${PORT}"
+
+%startscript
+  set -eu
+  export PATH="/opt/conda/bin:${PATH}"
+  export SANDBOX_CONFIG="${SANDBOX_CONFIG:-hpc}"
+  HOST="${SANDBOX_FUSION_HOST:-127.0.0.1}"
+  PORT="${SANDBOX_FUSION_PORT:-8080}"
+  export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+  export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+  export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+  export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+  export VECLIB_MAXIMUM_THREADS="${VECLIB_MAXIMUM_THREADS:-1}"
+  export BLIS_NUM_THREADS="${BLIS_NUM_THREADS:-1}"
+  cd /opt/sandboxfusion
+  exec python -m uvicorn sandbox.server.server:app --host "${HOST}" --port "${PORT}"

@@ -1,0 +1,8 @@
+{
+  "label": "How-to",
+  "position": 2,
+  "link": {
+    "type": "generated-index",
+    "description": "A detailed explanation of the various functions of the sandbox"
+  }
+}

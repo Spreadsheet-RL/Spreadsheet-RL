@@ -1,0 +1,32 @@
+.linkUnderlineDecoration {
+  color: #195ffd !important;
+  .underlineDecoration;
+}
+
+.underlineDecoration {
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-position: under;
+}
+
+.pointerDecoration {
+  cursor: pointer;
+}
+
+.greyDashDecoracion {
+  .underlineDecoration;
+  text-decoration-color: #dadbde !important;
+  text-decoration-style: dashed;
+}
+
+.editorWrapper {
+  background: var(--color-bg-1);
+  transform: translate3d(0, 0, 0);
+
+  div[widgetid='editor.contrib.resizableContentHoverWidget'] {
+    z-index: 999 !important;
+  }
+  :global(.monaco-hover) {
+    background-color: #fff;
+  }
+}

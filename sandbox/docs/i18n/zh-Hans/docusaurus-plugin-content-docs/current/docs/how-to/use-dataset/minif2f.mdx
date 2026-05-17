@@ -1,0 +1,20 @@
+---
+sidebar_position: 9
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# MiniF2F
+
+The miniF2F dataset was released by openai in [MiniF2F: a cross-system benchmark for formal Olympiad-level mathematics](https://arxiv.org/abs/2109.00110), with four languages available. As we conduct our research on lean4 and the initial release was in lean3, we adapted the version in [yangky11/miniF2F-lean4](https://github.com/yangky11/miniF2F-lean4).
+
+Both test set and valid set are released with 244 problems each.
+
+<DatasetSelector datasetKey="MiniF2F" generateDocFunc={docWithType} configFields={[
+  { name: 'prompt_template', type: 'input', description: 'All the {xxx} in the template will be filled by the corresponding column in the samples' },
+  { name: 'locale', type: 'select', description: 'Locale of prompts' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  locale: 'en',
+  run_timeout: 40,
+}} />

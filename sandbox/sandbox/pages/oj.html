@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <title>Online Judge</title>
+  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/css/select2.min.css" rel="stylesheet" />
+  <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/select2/4.0.13/js/select2.min.js"></script>
+  <script>
+    function rewriteEndpoint(ep) {
+      var currentPath = window.location.pathname;
+      var lastPlaygroundIndex = currentPath.lastIndexOf('/playground');
+
+      if (lastPlaygroundIndex === -1) {
+        return currentPath + ep;
+      }
+
+      var newPath = currentPath.substring(0, lastPlaygroundIndex);
+      var relativeEndpoint = newPath + '/' + ep;
+      relativeEndpoint = relativeEndpoint.replace(/\/+/g, '/');
+
+      return relativeEndpoint;
+    }
+
+    async function listDatasets() {
+      const response = await axios.get(rewriteEndpoint('/list_datasets'));
+      const datasets = response.data;
+      const datasetSelect = document.getElementById('dataset');
+      datasets.forEach(dataset => {
+        const option = document.createElement('option');
+        option.value = dataset;
+        option.textContent = dataset;
+        datasetSelect.appendChild(option);
+      });
+      listIds();
+    }
+
+    async function listIds() {
+      const dataset = document.getElementById('dataset').value;
+      const config = JSON.parse(document.getElementById('config').value);
+      const response = await axios.post(rewriteEndpoint('/list_ids'), { dataset, config });
+      const ids = response.data;
+      const idSelect = document.getElementById('id');
+      idSelect.innerHTML = '';
+      ids.forEach(id => {
+        const option = document.createElement('option');
+        option.value = id;
+        option.textContent = id;
+        idSelect.appendChild(option);
+      });
+      getPrompt();
+    }
+
+    async function getPrompt() {
+      const dataset = document.getElementById('dataset').value;
+      const id = document.getElementById('id').value;
+      const config = JSON.parse(document.getElementById('config').value);
+      const response = await axios.post(rewriteEndpoint('/get_prompt_by_id'), { dataset, id, config });
+      const prompt = response.data;
+      document.getElementById('prompt').textContent = prompt.prompt;
+    }
+
+    async function submit() {
+      const dataset = document.getElementById('dataset').value;
+      const id = document.getElementById('id').value;
+      const completion = document.getElementById('completion').value;
+      const config = JSON.parse(document.getElementById('config').value);
+      const response = await axios.post(rewriteEndpoint('/submit'), { dataset, id, completion, config });
+      const result = response.data;
+      document.getElementById('result').textContent = JSON.stringify(result, null, 2);
+    }
+
+    $(document).ready(function () {
+      $('#id').select2({
+        placeholder: 'select prompt id',
+        allowClear: false
+      });
+    });
+  </script>
+</head>
+
+<body onload="listDatasets()">
+  <h1>Online Judge</h1>
+  <div>
+    <label for="dataset">Dataset:</label>
+    <select id="dataset" onchange="listIds()"></select>
+  </div>
+  <div>
+    <label for="id">Prompt ID:</label>
+    <select id="id" onchange="getPrompt()" style="width: 100px"></select>
+  </div>
+  <div>
+    <label for="config">Config:</label>
+    <br />
+    <textarea id="config" rows="5" cols="30">
+{
+  "language": "python",
+  "is_fewshot": false
+}
+    </textarea>
+  </div>
+  <div>
+    <h2>Prompt:</h2>
+    <pre id="prompt"></pre>
+  </div>
+  <div>
+    <h2>Submit Answer:</h2>
+    <textarea id="completion" rows="10" cols="50"></textarea>
+    <br>
+    <button onclick="submit()">Submit</button>
+  </div>
+  <div>
+    <h2>Result:</h2>
+    <pre id="result"></pre>
+  </div>
+</body>
+
+</html>

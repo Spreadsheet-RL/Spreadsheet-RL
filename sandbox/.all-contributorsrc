@@ -1,0 +1,82 @@
+{
+  "projectName": "SandboxFusion",
+  "projectOwner": "bytedance",
+  "files": [
+    "README.md"
+  ],
+  "commitType": "docs",
+  "commitConvention": "angular",
+  "contributorsPerLine": 7,
+  "contributors": [
+    {
+      "login": "ssine",
+      "name": "sine",
+      "avatar_url": "https://avatars.githubusercontent.com/u/20841764?v=4",
+      "profile": "https://github.com/ssine",
+      "contributions": [
+        "code",
+        "data",
+        "design"
+      ]
+    },
+    {
+      "login": "liuq901",
+      "name": "Qi Liu",
+      "avatar_url": "https://avatars.githubusercontent.com/u/4028828?v=4",
+      "profile": "https://github.com/liuq901",
+      "contributions": [
+        "code",
+        "data"
+      ]
+    },
+    {
+      "login": "BytedSS0",
+      "name": "Shulin.Xin",
+      "avatar_url": "https://avatars.githubusercontent.com/u/186129147?v=4",
+      "profile": "https://github.com/BytedSS0",
+      "contributions": [
+        "code",
+        "data"
+      ]
+    },
+    {
+      "login": "cattaria",
+      "name": "可爱猫猫是梓喵",
+      "avatar_url": "https://avatars.githubusercontent.com/u/10678783?v=4",
+      "profile": "https://github.com/cattaria",
+      "contributions": [
+        "code",
+        "data"
+      ]
+    },
+    {
+      "login": "lseven-rs",
+      "name": "Xingwen Li",
+      "avatar_url": "https://avatars.githubusercontent.com/u/189442484?v=4",
+      "profile": "https://github.com/lseven-rs",
+      "contributions": [
+        "design"
+      ]
+    },
+    {
+      "login": "aoyanli",
+      "name": "aoyanli",
+      "avatar_url": "https://avatars.githubusercontent.com/u/186133689?v=4",
+      "profile": "https://github.com/aoyanli",
+      "contributions": [
+        "code",
+        "data"
+      ]
+    },
+    {
+      "login": "magic3007",
+      "name": "Magic Mai",
+      "avatar_url": "https://avatars.githubusercontent.com/u/30785720?v=4",
+      "profile": "https://magic3007.github.io",
+      "contributions": [
+        "code",
+        "data"
+      ]
+    }
+  ]
+}

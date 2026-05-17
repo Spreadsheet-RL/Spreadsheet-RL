@@ -1,0 +1,102 @@
+---
+sidebar_position: 1
+---
+import { constants } from '@site/src/constants';
+import CodeBlock from '@theme/CodeBlock';
+
+# Upload & Download Files
+
+Both the run_code and run_jupyter interfaces support two file-related parameters:
+
+- files: A dictionary of files to be uploaded before code execution, mapping file paths to file contents in base64 format
+- fetch_files: A list of file paths to be retrieved after code execution
+
+Since the usage of these parameters is identical, we'll use the run_code interface as an example to demonstrate file upload and download.
+
+## Upload
+
+export const snippet1 = String.raw`import json
+import base64
+import requests
+
+with open('flag.txt', 'rb') as f:
+    content = f.read()
+base64_content = base64.b64encode(content).decode('utf-8')
+
+response = requests.post('${ constants.host }/run_code', json={
+    'code': 'print(open("flag.txt").read())',
+    'language': 'python',
+    'files': {'flag.txt': base64_content}
+})
+
+print(json.dumps(response.json(), indent=2))
+`
+
+<CodeBlock language="python">
+{snippet1}
+</CodeBlock>
+
+Output:
+
+```json
+{
+  "status": "Success",
+  "message": "",
+  "compile_result": null,
+  "run_result": {
+    "status": "Finished",
+    "execution_time": 0.018889427185058594,
+    "return_code": 0,
+    "stdout": "secret flag\n",
+    "stderr": ""
+  },
+  "executor_pod_name": null,
+  "files": {}
+}
+```
+
+File paths are relative to the script's directory (a randomly generated /tmp/tmpxxxx) by default. You can also specify absolute paths like /tmp/flag.txt. If the specified path doesn't exist, the corresponding folder will be created first.
+
+## Download
+
+export const snippet2 = String.raw`import json
+import base64
+import requests
+
+response = requests.post('${ constants.host }/run_code', json={
+    'code': 'open("flag.txt", "w").write("this is a secret")',
+    'language': 'python',
+    'fetch_files': ['flag.txt']
+})
+
+print(json.dumps(response.json(), indent=2))
+print(base64.b64decode(response.json()['files']['flag.txt']).decode('utf-8'))
+`
+
+<CodeBlock language="python">
+{snippet2}
+</CodeBlock>
+
+Output:
+
+```json
+{
+  "status": "Success",
+  "message": "",
+  "compile_result": null,
+  "run_result": {
+    "status": "Finished",
+    "execution_time": 0.023561477661132812,
+    "return_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "executor_pod_name": null,
+  "files": {
+    "flag.txt": "dGhpcyBpcyBhIHNlY3JldA=="
+  }
+}
+this is a secret
+```
+
+The rules for file paths are the same as in the upload section.

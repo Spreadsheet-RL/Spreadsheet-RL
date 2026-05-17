@@ -1,0 +1,25 @@
+# files that diverge between internal and open source verison
+.gitattributes merge=ours
+# internal commands
+Makefile merge=ours
+# pip source, internal deps
+pyproject.toml merge=ours
+poetry.lock merge=ours
+# github has no lfs quota, so all the lfs files are kept as is
+runtime/bin/bash merge=ours
+*.jar merge=ours
+# internal only
+runtime/python/install-python-runtime.sh merge=ours
+sandbox/configs/* merge=ours
+# no psm lookup
+sandbox/database.py merge=ours
+# tokenizer change
+sandbox/datasets/repobench_p.py merge=ours
+sandbox/tests/datasets/test_repobench_p.py merge=ours
+# sample id differs
+sandbox/tests/datasets/test_mbpp.py merge=ours
+# package source differs
+scripts/Dockerfile.base merge=ours
+scripts/Dockerfile.server merge=ours
+# internal only configs
+sandbox/datasets/humaneval.py merge=ours

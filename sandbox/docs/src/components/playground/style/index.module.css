@@ -1,0 +1,11 @@
+.partTitle {
+  width: 4px;
+  height: 16px;
+  border-radius: 0 4px 4px 0;
+  background: rgb(var(--primary-6));
+}
+
+.sideWrap {
+  height: 100%;
+  overflow-y: auto;
+}

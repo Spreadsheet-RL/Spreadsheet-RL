@@ -1,0 +1,9 @@
+.col {
+  min-width: 0;
+}
+.spin {
+  height: 100%;
+}
+.spin .arco-spin-children {
+  height: 100%;
+}

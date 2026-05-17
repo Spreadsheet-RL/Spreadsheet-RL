@@ -1,0 +1,382 @@
+{
+  "R": [
+    {
+      "code": "\nf <- function(my_list) {    count <- 0\n    for (i in my_list) {\n        if (nchar(i) %% 2 == 0) {\n            count <- count + 1\n        }\n    }\n    return(count)\n}\ntest_humaneval <- function() {\n    candidate <- f\n    stopifnot(isTRUE(all.equal(candidate(c('mq', 'px', 'zy')), 3)))\n}\ntest_humaneval()",
+      "id": 0,
+      "inputs": "candidate(c('mq', 'px', 'zy'))",
+      "outputs": "3"
+    },
+    {
+      "code": "\nf <- function(s1, s2) {\n    return(paste0(s1, s2))\n}\ntest_humaneval <- function() {\n    candidate <- f\n    stopifnot(isTRUE(all.equal(candidate('ba', 'nana'), 'banana')))\n}\ntest_humaneval()",
+      "id": 1,
+      "inputs": "candidate('ba', 'nana')",
+      "outputs": "'banana'"
+    },
+    {
+      "code": "\nf <- function(d) {    if ('x' %in% names(d)) {\n        x <- d[['x']]\n    }\n    if ('y' %in% names(d)) {\n        y <- d[['y']]\n    }\n    return(c(x, y))\n}\ntest_humaneval <- function() {\n    candidate <- f\n    stopifnot(isTRUE(all.equal(candidate(list('x' = 5, 'y' = 12)), c(5, 12))))\n}\ntest_humaneval()",
+      "id": 2,
+      "inputs": "candidate(list('x' = 5, 'y' = 12))",
+      "outputs": "c(5, 12)"
+    }
+  ],
+  "bash": [
+    {
+      "code": "\n#!/bin/bash\n# $1 is a space-separated list\nf() {\n    count=0\n    for i in $1; do\n        if [ $(( ${#i} % 2 )) -eq 0 ]; then\n            count=$((count+1))\n        fi\n    done\n    echo $count\n}\n\ncandidate() {\n    f \"$@\"\n}\n\nset -e\nrun_test() {\n    [[ $(candidate \"mq px zy\") = \"3\" ]]\n}\n\nrun_test",
+      "id": 0,
+      "inputs": "$(candidate \"mq px zy\")",
+      "outputs": "\"3\""
+    },
+    {
+      "code": "\n#!/bin/bash\n# $1 is a string\n# $2 is a string\nf() {\n    echo \"$1$2\"\n}\n\ncandidate() {\n    f \"$@\"\n}\n\nset -e\nrun_test() {\n    [[ $(candidate \"ba\" \"nana\") = \"banana\" ]]\n}\n\nrun_test",
+      "id": 1,
+      "inputs": "$(candidate \"ba\" \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "#!/bin/bash\n# $1 is a two column CSV in key,value order\nf() {\n    local x y\n    while IFS=, read -r key value; do\n        if [ \"$key\" = \"x\" ]; then\n            x=$value\n        elif [ \"$key\" = \"y\" ]; then\n            y=$value\n        fi\n    done < <(echo -e \"$1\")\n    echo \"$x $y\"\n}\n\ncandidate() {\n    f \"$@\"\n}\n\nset -e\nrun_test() {\n    [[ $(candidate \"x,5\ny,12\") = \"5 12\" ]]\n}\n\nrun_test\n",
+      "id": 2,
+      "inputs": "$(candidate \"x,5\ny,12\")",
+      "outputs": "\"5 12\""
+    }
+  ],
+  "swift": [
+    {
+      "code": "\n\n/// \nfunc f(my_list: [String]) -> Int {\n    var count = 0\n    for i in my_list {\n        if i.count % 2 == 0 {\n            count += 1\n        }\n    }\n    return count\n}\n\n\nfunc ==(left: [(Int, Int)], right: [(Int, Int)]) -> Bool {\n    if left.count != right.count {\n        return false\n    }\n    for (l, r) in zip(left, right) {\n        if l != r {\n            return false\n        }\n    }\n    return true\n}\n            \nassert(f(my_list: [\"mq\", \"px\", \"zy\"]) == 3)",
+      "id": 0,
+      "inputs": "f(my_list: [\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\n\n/// \nfunc f(s1: String, s2: String) -> String {\n    return s1 + s2\n}\n\n\nfunc ==(left: [(Int, Int)], right: [(Int, Int)]) -> Bool {\n    if left.count != right.count {\n        return false\n    }\n    for (l, r) in zip(left, right) {\n        if l != r {\n            return false\n        }\n    }\n    return true\n}\n            \nassert(f(s1: \"ba\", s2: \"nana\") == \"banana\")",
+      "id": 1,
+      "inputs": "f(s1: \"ba\", s2: \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\nfunc f(d: [String : Int]) -> (Int, Int) {\n    var x = 0\n    var y = 0\n    \n    if let xValue = d[\"x\"] {\n        x = xValue\n    }\n    \n    if let yValue = d[\"y\"] {\n        y = yValue\n    }\n    \n    return (x, y)\n}\n\n\nfunc ==(left: [(Int, Int)], right: [(Int, Int)]) -> Bool {\n    if left.count != right.count {\n        return false\n    }\n    for (l, r) in zip(left, right) {\n        if l != r {\n            return false\n        }\n    }\n    return true\n}\n            \nassert(f(d: [\"x\" : 5, \"y\" : 12]) == (5, 12))",
+      "id": 2,
+      "inputs": "f(d: [\"x\" : 5, \"y\" : 12])",
+      "outputs": "(5, 12)"
+    }
+  ],
+  "python": [
+    {
+      "id": 0,
+      "code": "from typing import List\n\ndef f(my_list: List[str]) -> int:\n    count = 0\n    for i in my_list:\n        if len(i) % 2 == 0:\n            count += 1\n    return count\n\ndef check(candidate):\n    assert candidate(['mq', 'px', 'zy']) == 3\n\ndef test_check():\n    check(f)\n\ntest_check()\n",
+      "inputs": "candidate(['mq', 'px', 'zy'])",
+      "outputs": "3"
+    },
+    {
+      "id": 1,
+      "code": "from typing import List\n\ndef f(s1: str, s2: str) -> str:\n    return s1+s2\n\ndef check(candidate):\n    assert candidate('ba', 'nana') == 'banana'\n\ndef test_check():\n    check(f)\n\ntest_check()\n",
+      "inputs": "candidate('ba', 'nana')",
+      "outputs": "'banana'"
+    },
+    {
+      "id": 2,
+      "code": "from typing import Dict,Tuple\n\ndef f(d: Dict[str, int]) -> Tuple[int,int]:\n    if 'x' in d:\n        x = d['x']\n    if 'y' in d:\n        y = d['y']\n    return x,y\n\ndef check(candidate):\n    assert candidate({ 'x': 5, 'y': 12 }) == (5, 12)\n\ndef test_check():\n    check(f)\n\ntest_check()\n",
+      "inputs": "candidate({ 'x': 5, 'y': 12 })",
+      "outputs": "(5, 12)"
+    }
+  ],
+  "typescript": [
+    {
+      "code": "\nfunction f(my_list: string[]): number {\n    let count = 0;\n    for(let i of my_list) {\n        if (i.length % 2 === 0) {\n            count += 1;\n        }\n    }\n    return count;\n}\ndeclare var require: any;\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate([\"mq\", \"px\", \"zy\"]),3);\n}\n\ntest();",
+      "id": 0,
+      "inputs": "candidate([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\nfunction f(s1: string, s2: string): string {\n    return s1 + s2;\n}\ndeclare var require: any;\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate(\"ba\", \"nana\"),\"banana\");\n}\n\ntest();",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\nfunction f(d: {[key: string]: number}): [number, number] {\n    let x: number;\n    let y: number;\n    if ('x' in d) {\n        x = d['x'];\n    }\n    if ('y' in d) {\n        y = d['y'];\n    }\n    return [x, y];\n}\n\ndeclare var require: any;\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate({\"x\": 5, \"y\": 12}),[5, 12]);\n}\n\ntest();",
+      "id": 2,
+      "inputs": "candidate({\"x\": 5, \"y\": 12})",
+      "outputs": "[5, 12]"
+    }
+  ],
+  "nodejs": [
+    {
+      "code": "\nfunction f(my_list){\n    let count = 0;\n    for(let i of my_list){\n        if(i.length % 2 === 0){\n            count += 1;\n        }\n    }\n    return count;\n}\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate([\"mq\", \"px\", \"zy\"]),3);\n}\n\ntest();",
+      "id": 0,
+      "inputs": "candidate([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\nfunction f(s1, s2){\n    return s1+s2;\n}\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate(\"ba\", \"nana\"),\"banana\");\n}\n\ntest();",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\nfunction f(d){\n    let x, y;\n    if ('x' in d) {\n        x = d['x'];\n    }\n    if ('y' in d) {\n        y = d['y'];\n    }\n    return [x, y];\n}\nconst assert = require('node:assert');\n\n\nfunction test() {\n  let candidate = f;\n  assert.deepEqual(candidate({\"x\": 5, \"y\": 12}),[5, 12]);\n}\n\ntest();",
+      "id": 2,
+      "inputs": "candidate({\"x\": 5, \"y\": 12})",
+      "outputs": "[5, 12]"
+    }
+  ],
+  "csharp": [
+    {
+      "code": "\nusing System;\nusing System.Numerics;\nusing System.Diagnostics;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text;\nusing System.Security.Cryptography;\nclass Problem {\n    public static long F(List<string> my_list) {\n        long count = 0;\n        foreach(var i in my_list)\n        {\n            if (i.Length % 2 == 0)\n            {\n                count += 1;\n            }\n        }\n        return count;\n    }\n    public static void Main(string[] args) {\n    Debug.Assert(F((new List<string>(new string[]{(string)\"mq\", (string)\"px\", (string)\"zy\"}))) == (3L));\n    }\n\n}\n",
+      "id": 0,
+      "inputs": "F((new List<string>(new string[]{(string)\"mq\", (string)\"px\", (string)\"zy\"})))",
+      "outputs": "(3L)"
+    },
+    {
+      "code": "\nusing System;\nusing System.Numerics;\nusing System.Diagnostics;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text;\nusing System.Security.Cryptography;\nclass Problem {\n    public static string F(string s1, string s2) {\n        return s1 + s2;\n    }\n    public static void Main(string[] args) {\n    Debug.Assert(F((\"ba\"), (\"nana\")).Equals((\"banana\")));\n    }\n\n}\n",
+      "id": 1,
+      "inputs": "F((\"ba\"), (\"nana\"))",
+      "outputs": "(\"banana\")"
+    },
+    {
+      "code": "\nusing System;\nusing System.Numerics;\nusing System.Diagnostics;\nusing System.Collections.Generic;\nusing System.Linq;\nusing System.Text;\nusing System.Security.Cryptography;\nclass Problem {\n    public static Tuple<long, long> F(Dictionary<string,long> d) {\n        long x = 0;\n        long y = 0;\n        if (d.ContainsKey(\"x\"))\n        {\n            x = d[\"x\"];\n        }\n        if (d.ContainsKey(\"y\"))\n        {\n            y = d[\"y\"];\n        }\n        return Tuple.Create(x, y);\n    }\n    public static void Main(string[] args) {\n    Debug.Assert(F((new Dictionary<string,long>(){{\"x\", 5L}, {\"y\", 12L}})).Equals((Tuple.Create(5L, 12L))));\n    }\n\n}\n",
+      "id": 2,
+      "inputs": "F((new Dictionary<string,long>(){{\"x\", 5L}, {\"y\", 12L}}))",
+      "outputs": "(Tuple.Create(5L, 12L))"
+    }
+  ],
+  "rust": [
+    {
+      "code": "\nfn f(my_list: Vec<String>) -> isize {\n    let mut count = 0;\n    for i in my_list {\n        if i.len() % 2 == 0 {\n            count += 1;\n        }\n    }\n    count\n}\n\nfn main() {\n    let candidate = f;\n    assert_eq!(candidate(vec![String::from(\"mq\"), String::from(\"px\"), String::from(\"zy\")]), 3);\n}\n",
+      "id": 0,
+      "inputs": "candidate(vec![String::from(\"mq\"), String::from(\"px\"), String::from(\"zy\")])",
+      "outputs": "3"
+    },
+    {
+      "code": "\nfn f(s1: String, s2: String) -> String {\n    format!(\"{}{}\", s1, s2)\n}\n\nfn main() {\n    let candidate = f;\n    assert_eq!(candidate(String::from(\"ba\"), String::from(\"nana\")), String::from(\"banana\"));\n}\n",
+      "id": 1,
+      "inputs": "candidate(String::from(\"ba\"), String::from(\"nana\"))",
+      "outputs": "String::from(\"banana\")"
+    },
+    {
+      "code": "\nuse std::collections::HashMap;\n\nfn f(d: HashMap<String, isize>) -> (isize, isize) {\n    let x = *d.get(\"x\").unwrap_or(&0);\n    let y = *d.get(\"y\").unwrap_or(&0);\n    (x, y)\n}\n\nfn main() {\n    let candidate = f;\n    assert_eq!(candidate(HashMap::from([(String::from(\"x\"), 5), (String::from(\"y\"), 12)])), (5, 12));\n}\n",
+      "id": 2,
+      "inputs": "candidate(HashMap::from([(String::from(\"x\"), 5), (String::from(\"y\"), 12)]))",
+      "outputs": "(5, 12)"
+    }
+  ],
+  "julia": [
+    {
+      "code": "\nfunction f(my_list::Vector{String})::Int64 \n    count = 0\n    for i in my_list\n        if length(i) % 2 == 0\n            count += 1\n        end\n    end\n    return count\nend\nusing Test\n\n@testset begin\n\ncandidate = f;\n\t@test(candidate([\"mq\", \"px\", \"zy\"]) == 3)\nend\n",
+      "id": 0,
+      "inputs": "candidate([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\nfunction f(s1::String, s2::String)::String \n    return s1 * s2\nend\nusing Test\n\n@testset begin\n\ncandidate = f;\n\t@test(candidate(\"ba\", \"nana\") == \"banana\")\nend\n",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\nfunction f(d::Dict{String, Int64})::Tuple{Int64, Int64}\n    if \"x\" in keys(d)\n        x = d[\"x\"]\n    end\n    if \"y\" in keys(d)\n        y = d[\"y\"]\n    end\n    return x, y\nend\nusing Test\n\n@testset begin\n\ncandidate = f;\n\t@test(candidate(Dict(\"x\" => 5, \"y\" => 12)) == (5, 12))\nend\n",
+      "id": 2,
+      "inputs": "candidate(Dict(\"x\" => 5, \"y\" => 12))",
+      "outputs": "(5, 12)"
+    }
+  ],
+  "php": [
+    {
+      "code": "\n<?php\nfunction f($my_list) {\n    $count = 0;\n    foreach ($my_list as $i) {\n        if (strlen($i) % 2 == 0) {\n            $count += 1;\n        }\n    }\n    return $count;\n}\nfunction candidate(...$args) {\n    return f(...$args);\n}\n\nfunction test(): void {\n    if (candidate(array(\"mq\", \"px\", \"zy\")) !== 3) { throw new Exception(\"Test failed!\"); }\n}\n\ntest();",
+      "id": 0,
+      "inputs": "candidate(array(\"mq\", \"px\", \"zy\"))",
+      "outputs": "3"
+    },
+    {
+      "code": "\n<?php\nfunction f($s1, $s2) {\n    return $s1.$s2;\n}\nfunction candidate(...$args) {\n    return f(...$args);\n}\n\nfunction test(): void {\n    if (candidate(\"ba\", \"nana\") !== \"banana\") { throw new Exception(\"Test failed!\"); }\n}\n\ntest();",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\n<?php\nfunction f($d) {\n    $x = NULL;\n    $y = NULL;\n    if (array_key_exists('x', $d)) {\n        $x = $d['x'];\n    }\n    if (array_key_exists('y', $d)) {\n        $y = $d['y'];\n    }\n    return array($x, $y);\n}\n\nfunction candidate(...$args) {\n    return f(...$args);\n}\n\nfunction test(): void {\n    if (candidate(array(\"x\" => 5, \"y\" => 12)) !== array(5, 12)) { throw new Exception(\"Test failed!\"); }\n}\n\ntest();",
+      "id": 2,
+      "inputs": "candidate(array(\"x\" => 5, \"y\" => 12))",
+      "outputs": "array(5, 12)"
+    }
+  ],
+  "scala": [
+    {
+      "code": "\nimport scala.math._\nimport scala.collection.mutable._\nobject Problem {\n    def f(my_list : List[String]) : Long = {\n        var count: Long = 0\n        for (i <- my_list) {\n            if (i.length % 2 == 0) {\n                count += 1\n            }\n        }\n        count\n    }\n    def main(args: Array[String]) = {\n    assert(f((List[String](\"mq\", \"px\", \"zy\"))) == (3l));\n    }\n\n}\n",
+      "id": 0,
+      "inputs": "f((List[String](\"mq\", \"px\", \"zy\")))",
+      "outputs": "(3l)"
+    },
+    {
+      "code": "\nimport scala.math._\nimport scala.collection.mutable._\nobject Problem {\n    def f(s1 : String, s2 : String) : String = {\n        s1 + s2\n    }\n    def main(args: Array[String]) = {\n    assert(f((\"ba\"), (\"nana\")).equals((\"banana\")));\n    }\n\n}\n",
+      "id": 1,
+      "inputs": "f((\"ba\"), (\"nana\"))",
+      "outputs": "(\"banana\")"
+    },
+    {
+      "code": "\nimport scala.math._\nimport scala.collection.mutable._\nobject Problem {\n    def f(d : Map[String,Long]) : Tuple2[Long, Long] = {\n        var x, y : Long = 0\n        if (d.contains(\"x\")) {\n            x = d(\"x\")\n        }\n        if (d.contains(\"y\")) {\n            y = d(\"y\")\n        }\n        (x, y)\n    }\n    def main(args: Array[String]) = {\n    assert(f((Map[String,Long](\"x\" -> 5l, \"y\" -> 12l))).equals(((5l, 12l))));\n    }\n\n}\n",
+      "id": 2,
+      "inputs": "f((Map[String,Long](\"x\" -> 5l, \"y\" -> 12l)))",
+      "outputs": "((5l, 12l))"
+    }
+  ],
+  "perl": [
+    {
+      "code": "\nsub f {\n    my($my_list) = @_;\n    my $count = 0;\n    foreach my $i (@$my_list) {\n        if (length($i) % 2 == 0) {\n            $count += 1;\n        }\n    }\n    return $count;\n}\nuse Test::Deep;\n\n\nsub testhumaneval {\n    my $candidate = \\&f;\n        if(eq_deeply($candidate->([\"mq\", \"px\", \"zy\"]),3)) {\n        print \"ok!\" }else{\n        exit 1;\n        }\n}\n\ntesthumaneval();",
+      "id": 0,
+      "inputs": "$candidate->([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\n# \nsub f {\n    my($s1, $s2) = @_;\n    return $s1 . $s2;\n}\nuse Test::Deep;\n\n\nsub testhumaneval {\n    my $candidate = \\&f;\n        if(eq_deeply($candidate->(\"ba\", \"nana\"),\"banana\")) {\n        print \"ok!\" }else{\n        exit 1;\n        }\n}\n\ntesthumaneval();",
+      "id": 1,
+      "inputs": "$candidate->(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\n# \nsub f {\n    my ($d) = @_;\n    my $x;\n    my $y;\n    if (exists $d->{'x'}) {\n        $x = $d->{'x'};\n    }\n    if (exists $d->{'y'}) {\n        $y = $d->{'y'};\n    }\n    return [$x, $y];\n}\n\nuse Test::Deep;\n\nsub testhumaneval {\n    my $candidate = \\&f;\n    if (eq_deeply($candidate->({\"x\" => 5, \"y\" => 12}), [5, 12])) {\n        print \"ok!\n\";\n    } else {\n        exit 1;\n    }\n}\n\ntesthumaneval();",
+      "id": 2,
+      "inputs": "$candidate->({\"x\" => 5, \"y\" => 12})",
+      "outputs": "[5, 12]"
+    }
+  ],
+  "go_test": [
+    {
+      "code": "\npackage f_test\n\nimport (\n    \"testing\"\n    \"fmt\"\n)\n\nfunc f(my_list []string) int {\n    count := 0\n    for _, i := range my_list {\n        if len(i)%2 == 0 {\n            count += 1\n        }\n    }\n    return count\n}\n\nfunc TestF(t *testing.T) {\n  candidate := f\n\ttype test struct {\n\t\tactual   interface{}\n\t\texpected interface{}\n\t}\n   tests := []test{\n     { actual: candidate([]string{\"mq\", \"px\", \"zy\"}), expected: 3 },\n   }\n\n\tfor i, tc := range tests {\n\t\tt.Run(fmt.Sprintf(\"test num % d\", i), func(t *testing.T) {\n\t\t\tif fmt.Sprintf(\"%v\", tc.actual) != fmt.Sprintf(\"%v\", tc.expected) {\n\t\t\t\tt.Errorf(\"expected '%s', got '%s'\", tc.expected, tc.actual)\n\t\t\t}\n\t\t})\n\t}\n}\n",
+      "id": 0,
+      "inputs": "candidate([]string{\"mq\", \"px\", \"zy\"})",
+      "outputs": "3"
+    },
+    {
+      "code": "\npackage f_test\n\nimport (\n    \"testing\"\n    \"fmt\"\n)\n\nfunc f(s1 string, s2 string) string {\n    return s1 + s2\n}\nfunc TestF(t *testing.T) {\n  candidate := f\n\ttype test struct {\n\t\tactual   interface{}\n\t\texpected interface{}\n\t}\n   tests := []test{\n     { actual: candidate(\"ba\", \"nana\"), expected: \"banana\" },\n   }\n\n\tfor i, tc := range tests {\n\t\tt.Run(fmt.Sprintf(\"test num % d\", i), func(t *testing.T) {\n\t\t\tif fmt.Sprintf(\"%v\", tc.actual) != fmt.Sprintf(\"%v\", tc.expected) {\n\t\t\t\tt.Errorf(\"expected '%s', got '%s'\", tc.expected, tc.actual)\n\t\t\t}\n\t\t})\n\t}\n}\n",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\npackage f_test\n\nimport (\n    \"testing\"\n    \"fmt\"\n)\n\nfunc f(d map[string]int) ([]interface{}) {\n    var x, y int\n\n    if val, ok := d[\"x\"]; ok {\n        x = val\n    }\n    if val, ok := d[\"y\"]; ok {\n        y = val\n    }\n\n    return []interface{}{x, y}\n}\n\nfunc TestF(t *testing.T) {\n  candidate := f\n\ttype test struct {\n\t\tactual   interface{}\n\t\texpected interface{}\n\t}\n   tests := []test{\n     { actual: candidate(map[string]int{\"x\": 5, \"y\": 12}), expected: []interface{}{5, 12} },\n   }\n\n\tfor i, tc := range tests {\n\t\tt.Run(fmt.Sprintf(\"test num % d\", i), func(t *testing.T) {\n\t\t\tif fmt.Sprintf(\"%v\", tc.actual) != fmt.Sprintf(\"%v\", tc.expected) {\n\t\t\t\tt.Errorf(\"expected '%s', got '%s'\", tc.expected, tc.actual)\n\t\t\t}\n\t\t})\n\t}\n}\n",
+      "id": 2,
+      "inputs": "candidate(map[string]int{\"x\": 5, \"y\": 12})",
+      "outputs": "[]interface{}{5, 12}"
+    }
+  ],
+  "lua": [
+    {
+      "code": "\nlocal function f(my_list)\n    local count = 0\n    for i, v in ipairs(my_list) do\n        if #v % 2 == 0 then\n            count = count + 1\n        end\n    end\n    return count\nend\nlu = require('luaunit')\n\nfunction test_humaneval()\nlocal candidate = f\n    lu.assertEquals(candidate({'mq', 'px', 'zy'}), 3)\nend\n\nos.exit(lu.LuaUnit.run())",
+      "id": 0,
+      "inputs": "candidate({'mq', 'px', 'zy'})",
+      "outputs": "3"
+    },
+    {
+      "code": "\nlocal function f(s1, s2)\n    return s1..s2\nend\nlu = require('luaunit')\n\nfunction test_humaneval()\nlocal candidate = f\n    lu.assertEquals(candidate('ba', 'nana'), 'banana')\nend\n\nos.exit(lu.LuaUnit.run())",
+      "id": 1,
+      "inputs": "candidate('ba', 'nana')",
+      "outputs": "'banana'"
+    },
+    {
+      "code": "\nlocal function f(d)\n    local result = {}\n    if d['x'] then\n        table.insert(result, d['x'])\n    end\n    if d['y'] then\n        table.insert(result, d['y'])\n    end\n    return result\nend\n\nlu = require('luaunit')\n\nfunction test_humaneval()\n    local candidate = f\n    lu.assertEquals(candidate({['x'] = 5, ['y'] = 12}), {5, 12})\nend\n\nos.exit(lu.LuaUnit.run())",
+      "id": 2,
+      "inputs": "candidate({['x'] = 5, ['y'] = 12})",
+      "outputs": "{5, 12}"
+    }
+  ],
+  "D_ut": [
+    {
+      "code": "\nimport std.math;\nimport std.typecons;\n\nlong f(string[] my_list) \n{\n    long count = 0;\n    foreach (i; my_list)\n    {\n        if (i.length % 2 == 0)\n        {\n            count++;\n        }\n    }\n    return count;\n}\nunittest\n{\n    alias candidate = f;\n\n    assert(candidate([\"mq\", \"px\", \"zy\"]) == 3L);\n}\nvoid main(){}",
+      "id": 0,
+      "inputs": "candidate([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3L"
+    },
+    {
+      "code": "\nimport std.math;\nimport std.conv;\n\nstring f(string s1, string s2) \n{\n    return s1 ~ s2;\n}\nunittest\n{\n    alias candidate = f;\n\n    assert(candidate(\"ba\", \"nana\") == \"banana\");\n}\nvoid main(){}",
+      "id": 1,
+      "inputs": "candidate(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\nimport std.math;\nimport std.typecons;\nimport std.algorithm;\nimport std.array;\nimport std.typecons;\n\nTuple!(long, long) f(Nullable!(long[string]) d) \n{\n    long x = 0, y = 0;\n    if (!d.isNull) {\n        auto dict = d.get();\n        foreach (key, value; dict) {\n            if (key == \"x\") {\n                x = value;\n            }\n            if (key == \"y\") {\n                y = value;\n            }\n        }\n    }\n    return tuple(x, y);\n}\nunittest\n{\n    alias candidate = f;\n\n    assert(candidate([\"x\": 5L, \"y\": 12L].nullable) == tuple(5L, 12L));\n}\nvoid main(){}",
+      "id": 2,
+      "inputs": "candidate([\"x\": 5L, \"y\": 12L].nullable)",
+      "outputs": "tuple(5L, 12L)"
+    }
+  ],
+  "cpp": [
+    {
+      "code": "\n#include<assert.h>\n#include<bits/stdc++.h>\nlong f(std::vector<std::string> my_list) {\n    long count = 0;\n    for (std::string i : my_list) {\n        if (i.size() % 2 == 0) {\n            count += 1;\n        }\n    }\n    return count;\n}\nint main() {\n    auto candidate = f;\n    assert(candidate((std::vector<std::string>({(std::string)\"mq\", (std::string)\"px\", (std::string)\"zy\"}))) == (3));\n}\n",
+      "id": 0,
+      "inputs": "candidate((std::vector<std::string>({(std::string)\"mq\", (std::string)\"px\", (std::string)\"zy\"})))",
+      "outputs": "(3)"
+    },
+    {
+      "code": "\n#include<assert.h>\n#include<bits/stdc++.h>\nstd::string f(std::string s1, std::string s2) {\n    return s1 + s2;\n}\nint main() {\n    auto candidate = f;\n    assert(candidate((\"ba\"), (\"nana\")) == (\"banana\"));\n}\n",
+      "id": 1,
+      "inputs": "candidate((\"ba\"), (\"nana\"))",
+      "outputs": "(\"banana\")"
+    },
+    {
+      "code": "\n#include<assert.h>\n#include<bits/stdc++.h>\nstd::tuple<long, long> f(std::map<std::string,long> d) {\n    long x = 0, y = 0;\n    if(d.find(\"x\") != d.end()){\n        x = d[\"x\"];\n    }\n    if(d.find(\"y\") != d.end()){\n        y = d[\"y\"];\n    }\n    return std::make_tuple(x, y);\n}\nint main() {\n    auto candidate = f;\n    assert(candidate((std::map<std::string,long>({{\"x\", 5}, {\"y\", 12}}))) == (std::make_tuple(5, 12)));\n}\n",
+      "id": 2,
+      "inputs": "candidate((std::map<std::string,long>({{\"x\", 5}, {\"y\", 12}})))",
+      "outputs": "(std::make_tuple(5, 12))"
+    }
+  ],
+  "java": [
+    {
+      "code": "\nimport java.util.*;\nimport java.lang.reflect.*;\nimport org.javatuples.*;\nimport java.security.*;\nimport java.math.*;\nimport java.io.*;\nimport java.util.stream.*;\nclass Problem {\n    public static long f(ArrayList<String> my_list) {\n        long count = 0;\n        for (String i : my_list) {\n            if (i.length() % 2 == 0) {\n                count += 1;\n            }\n        }\n        return count;\n    }\n    public static void main(String[] args) {\n    assert(f((new ArrayList<String>(Arrays.asList((String)\"mq\", (String)\"px\", (String)\"zy\")))) == (3l));\n    }\n\n}\n",
+      "id": 0,
+      "inputs": "f((new ArrayList<String>(Arrays.asList((String)\"mq\", (String)\"px\", (String)\"zy\"))))",
+      "outputs": "(3l)"
+    },
+    {
+      "code": "\nimport java.util.*;\nimport java.lang.reflect.*;\nimport org.javatuples.*;\nimport java.security.*;\nimport java.math.*;\nimport java.io.*;\nimport java.util.stream.*;\nclass Problem {\n    public static String f(String s1, String s2) {\n        return s1.concat(s2);\n    }\n    public static void main(String[] args) {\n    assert(f((\"ba\"), (\"nana\")).equals((\"banana\")));\n    }\n\n}\n",
+      "id": 1,
+      "inputs": "f((\"ba\"), (\"nana\"))",
+      "outputs": "(\"banana\")"
+    },
+    {
+      "code": "\nimport java.util.*;\nimport java.lang.reflect.*;\nimport org.javatuples.*;\nimport java.security.*;\nimport java.math.*;\nimport java.io.*;\nimport java.util.stream.*;\nclass Problem {\n    public static Pair<Long, Long> f(HashMap<String,Long> d) {\n        Long x = null;\n        Long y = null;\n        if (d.containsKey(\"x\")) {\n            x = d.get(\"x\");\n        }\n        if (d.containsKey(\"y\")) {\n            y = d.get(\"y\");\n        }\n        return new Pair<>(x, y);\n    }\n    public static void main(String[] args) {\n    assert(f((new HashMap<String,Long>(Map.of(\"x\", 5l, \"y\", 12l)))).equals((Pair.with(5l, 12l))));\n    }\n\n}\n",
+      "id": 2,
+      "inputs": "f((new HashMap<String,Long>(Map.of(\"x\", 5l, \"y\", 12l))))",
+      "outputs": "(Pair.with(5l, 12l))"
+    }
+  ],
+  "ruby": [
+    {
+      "code": "\ndef f(my_list)\n    count = 0\n    my_list.each do |i|\n        if i.length % 2 == 0\n            count += 1\n        end\n    end\n    count\nend\nrequire 'test/unit'\nclass TestHumanEval < Test::Unit::TestCase\n  def test_f\n    candidate = method(:f)\n    assert_equal(3, candidate.call([\"mq\", \"px\", \"zy\"]))\n  end\nend\n",
+      "id": 0,
+      "inputs": "candidate.call([\"mq\", \"px\", \"zy\"])",
+      "outputs": "3"
+    },
+    {
+      "code": "\ndef f(s1, s2)\n    s1+s2\nend\nrequire 'test/unit'\nclass TestHumanEval < Test::Unit::TestCase\n  def test_f\n    candidate = method(:f)\n    assert_equal(\"banana\", candidate.call(\"ba\", \"nana\"))\n  end\nend\n",
+      "id": 1,
+      "inputs": "candidate.call(\"ba\", \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\ndef f(d)\n    x = nil\n    y = nil\n    if d.key?('x')\n        x = d['x']\n    end\n    if d.key?('y')\n        y = d['y']\n    end\n    [x, y]\nend\nrequire 'test/unit'\nclass TestHumanEval < Test::Unit::TestCase\n  def test_f\n    candidate = method(:f)\n    assert_equal([5, 12], candidate.call({\"x\" => 5, \"y\" => 12}))\n  end\nend\n",
+      "id": 2,
+      "inputs": "candidate.call({\"x\" => 5, \"y\" => 12})",
+      "outputs": "[5, 12]"
+    }
+  ],
+  "racket": [
+    {
+      "code": "\n#lang racket\n\n(define (f my_list)\n  (define count 0)\n  (for ([i my_list])\n    (when (even? (string-length i))\n      (set! count (+ count 1))))\n  count)\n(require rackunit)\n\n(define (test-humaneval) \n\n  (let (( candidate f))\n    (check-within (candidate (list \"mq\" \"px\" \"zy\")) 3 0.001)\n))\n\n(test-humaneval)",
+      "id": 0,
+      "inputs": "(candidate (list \"mq\" \"px\" \"zy\"))",
+      "outputs": "3"
+    },
+    {
+      "code": "\n#lang racket\n\n(define (f s1 s2)\n  (string-append s1 s2))\n(require rackunit)\n\n(define (test-humaneval) \n\n  (let (( candidate f))\n    (check-within (candidate \"ba\" \"nana\") \"banana\" 0.001)\n))\n\n(test-humaneval)",
+      "id": 1,
+      "inputs": "(candidate \"ba\" \"nana\")",
+      "outputs": "\"banana\""
+    },
+    {
+      "code": "\n#lang racket\n\n(define (f d)\n  (define x (hash-ref d \"x\" #f))\n  (define y (hash-ref d \"y\" #f))\n  (list x y))\n(require rackunit)\n\n(define (test-humaneval) \n\n  (let (( candidate f))\n    (check-within (candidate #hash((\"x\" .  5) (\"y\" .  12))) (list 5 12) 0.001)\n))\n\n(test-humaneval)",
+      "id": 2,
+      "inputs": "(candidate #hash((\"x\" .  5) (\"y\" .  12)))",
+      "outputs": "(list 5 12)"
+    }
+  ]
+}

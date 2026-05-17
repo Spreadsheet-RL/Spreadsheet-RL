@@ -1,0 +1,22 @@
+---
+sidebar_position: 5
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# MultiPL-E MBPP
+
+This multilingual MBPP was from [MultiPL-E](https://github.com/nuprl/MultiPL-E). 18 languages was implemented and tested.
+
+<DatasetSelector datasetKey="MultipleMBPP" generateDocFunc={docWithType} configFields={[
+  { name: 'extra.is_freeform', type: 'boolean', description: 'Use freeform mode for instruction finetuned models' },
+  { name: 'locale', type: 'select', description: 'Locale of freeform prompts' },
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  locale: 'en',
+  run_timeout: 20,
+  extra: {
+    is_freeform: false
+  }
+}} />

@@ -1,0 +1,19 @@
+---
+sidebar_position: 7
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# Code Contests
+
+<DatasetSelector datasetKey="CommonOJ" generateDocFunc={docWithType} configFields={[
+  { name: 'language', type: 'select', description: 'Programming language' },
+  { name: 'locale', type: 'select', description: 'Locale of prompts' },
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  language: 'cpp',
+  locale: 'en',
+  compile_timeout: 20,
+  run_timeout: 20,
+}}/>

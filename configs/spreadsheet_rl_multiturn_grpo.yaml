@@ -1,0 +1,25 @@
+hydra:
+  searchpath:
+    - file://${oc.env:SPREADSHEET_RL_VERL_CONFIG_DIR,verl/verl/trainer/config}
+
+defaults:
+  - ppo_trainer
+  - _self_
+
+data:
+  max_prompt_length: 4096
+  return_raw_chat: True
+
+actor_rollout_ref:
+  hybrid_engine: True
+  rollout:
+    name: vllm
+    mode: async
+    multi_turn:
+      enable: True
+      max_parallel_calls: 20
+      max_tool_response_length: 8192
+
+reward:
+  reward_manager:
+    name: rate_limited

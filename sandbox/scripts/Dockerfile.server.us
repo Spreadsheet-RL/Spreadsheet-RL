@@ -1,0 +1,41 @@
+FROM volcengine/sandbox-fusion:base-20250609
+
+COPY ./runtime/go ./runtime/go
+# download and cache go deps
+RUN cd ./runtime/go \
+    && go build
+
+COPY ./runtime/node /root/sandbox/runtime/node
+# also install puppetter chrome requirements (TODO: keep effective packages only)
+RUN cd /root/sandbox/runtime/node && npm ci && \
+    apt-get update -y && apt-get install -y fontconfig locales gconf-service libasound2 libatk1.0-0 libc6 libcairo2 libcups2 libdbus-1-3 libexpat1 libfontconfig1 libgcc1 libgconf-2-4 libgdk-pixbuf2.0-0 libglib2.0-0 libgtk-3-0 libnspr4 libpango-1.0-0 libpangocairo-1.0-0 libstdc++6 libx11-6 libx11-xcb1 libxcb1 libxcomposite1 libxcursor1 libxdamage1 libxext6 libxfixes3 libxi6 libxrandr2 libxrender1 libxss1 libxtst6 ca-certificates fonts-liberation libappindicator1 libnss3 lsb-release xdg-utils libgbm-dev
+
+# cache dotnet
+RUN dotnet new console -o /tmp/dotnet && dotnet run --project /tmp/dotnet
+
+# cache lean
+COPY ./runtime/lean /root/sandbox/runtime/lean
+RUN cd /root/sandbox/runtime/lean && lake build
+
+COPY ./runtime/python ./runtime/python
+RUN cd ./runtime/python && bash install-python-runtime.sh us
+# fix pyqt error, see https://github.com/NVlabs/instant-ngp/discussions/300
+ENV QT_QPA_PLATFORM=offscreen
+ENV OMP_NUM_THREADS=2
+
+COPY ./ /root/sandbox
+WORKDIR /root/sandbox
+RUN poetry config virtualenvs.create false \
+    # TODO: find out why poetry throws error without this
+    && touch /root/miniconda3/pyvenv.cfg \
+    && poetry install \
+    && cd ./docs \
+    && npm ci \
+    && npm run build
+
+RUN useradd -m app && echo 'app:app' | chpasswd \
+    && chmod og+rx /root \
+    && mkdir -p /mnt \
+    && chmod og+rwx /mnt
+
+CMD bash /root/sandbox/scripts/run.sh

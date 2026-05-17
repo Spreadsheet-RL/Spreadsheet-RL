@@ -1,0 +1,26 @@
+---
+sidebar_position: 11
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# CRUXEval-X
+
+This is a multilingual version of CRUXEval, published in [CRUXEval-X: A Benchmark for Multilingual Code Reasoning, Understanding and Execution](https://arxiv.org/abs/2408.13001). A version with modified data format is uploaded to `sine/FusedCRUXEvalX` , with `input_reasoning` rename to `input` and `output_reasoning` rename to `output` to align with the original column names. A language prefix is added to `id` column to reflect the actual language used.
+
+<DatasetSelector datasetKey="CRUXEvalX" generateDocFunc={docWithType} configFields={[
+  { name: 'extra.mode', type: 'select', description: 'Input or Output mode of the dataset' },
+  { name: 'extra.coding_wrap_prompt', type: 'boolean', description: 'wrap prompts with chat format' },
+  { name: 'extra.use_cot', type: 'boolean', description: 'add cot instructions to the prompts' },
+  { name: 'extra.phind_output', type: 'boolean', description: 'use prompts for Phind models' },
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  run_timeout: 20,
+  extra: {
+    mode: 'ipnut',
+    coding_wrap_prompt: false,
+    use_cot: false,
+    phind_output: false,
+  }
+}} />

@@ -1,0 +1,8 @@
+{
+    "label": "Execution Detail",
+    "position": 1,
+    "link": {
+        "type": "generated-index",
+        "description": "A detailed explanation on how each language is executed"
+    }
+}

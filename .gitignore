@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.venv/
+/reward/uv.lock
+/sandbox/uv.lock
+/sandbox/scripts/client/uv.lock
+
+# Training outputs and caches
+/checkpoints/
+/data/
+/logs/
+/outputs/
+/rollout_data/
+/slurm_logs/
+/slurm_workspaces/
+/validation_data/
+/wandb/
+/verl_data/
+/model_weights/
+
+# Slurm and local runtime artifacts
+*.out
+*.err
+*.log
+*.sqlite
+*.sqlite3
+*.db
+sandboxfusion*.sif
+SandboxFusion*.sif
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

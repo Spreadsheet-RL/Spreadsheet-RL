@@ -1,0 +1,17 @@
+---
+sidebar_position: 14
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# VerilogEval
+
+This is an implementation of [VerilogEval: Evaluating Large Language Models for Verilog Code Generation](https://arxiv.org/abs/2309.07544). Both human and machine subsets are implementated.
+
+<DatasetSelector datasetKey="VerilogEval" generateDocFunc={docWithType} configFields={[
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  compile_timeout: 60,
+  run_timeout: 30,
+}} />

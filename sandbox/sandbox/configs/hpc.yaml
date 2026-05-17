@@ -1,0 +1,21 @@
+dataset:
+  database:
+    backend:
+      # Disable external DB usage by default for HPC deployments.
+      type: none
+    # Do not load local sample tables at startup (keeps the image lightweight).
+    cache: null
+  # Only used by dataset endpoints; keep low by default.
+  max_runner_concurrency: 0
+  # No datasets registered by default (avoids importing optional deps on startup).
+  registry: []
+
+sandbox:
+  # HPC/Apptainer deployments typically run unprivileged; keep isolation "none" by default.
+  isolation: none
+  cleanup_process: false
+  restore_bash: false
+  max_concurrency: 0
+
+common:
+  logging_color: false

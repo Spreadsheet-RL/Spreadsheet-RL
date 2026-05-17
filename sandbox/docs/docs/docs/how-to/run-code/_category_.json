@@ -1,0 +1,8 @@
+{
+  "label": "Run Code",
+  "position": 1,
+  "link": {
+    "type": "generated-index",
+    "description": "running a code snippet"
+  }
+}

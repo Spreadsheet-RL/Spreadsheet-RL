@@ -1,0 +1,275 @@
+---
+sidebar_position: 1
+---
+import { constants } from '@site/src/constants';
+import CodeBlock from '@theme/CodeBlock';
+
+# Get Started
+
+The code sandbox service primarily offers two functions: running code and evaluating the correctness of problems.
+
+Supported programming languages:
+
+<table style={{width: '100%', borderCollapse: 'collapse', border: 'none'}}>
+  <tbody style={{width: '100%', display: 'table'}}>
+    <tr style={{width: '100%', borderTop: 'none'}}>
+      <td style={{width: '33.33%', verticalAlign: 'top', padding: '0 10px', border: 'none'}}>
+        <ul style={{padding: '0 0 0 20px', margin: 0}}>
+          <li>Python (python, pytest)</li>
+          <li>C++</li>
+          <li>C#</li>
+          <li>Go (go, go test)</li>
+          <li>Java (javac, junit)</li>
+          <li>NodeJS</li>
+          <li>Typescript (tsx, jest)</li>
+          <li>Lean</li>
+        </ul>
+      </td>
+      <td style={{width: '33.33%', verticalAlign: 'top', padding: '0 10px', border: 'none'}}>
+        <ul style={{padding: '0 0 0 20px', margin: 0}}>
+          <li>Scala</li>
+          <li>Kotlin</li>
+          <li>PHP</li>
+          <li>Rust</li>
+          <li>Bash</li>
+          <li>Lua</li>
+          <li>R</li>
+          <li>Perl</li>
+        </ul>
+      </td>
+      <td style={{width: '33.33%', verticalAlign: 'top', padding: '0 10px', border: 'none'}}>
+        <ul style={{padding: '0 0 0 20px', margin: 0}}>
+          <li>D</li>
+          <li>Ruby</li>
+          <li>Julia</li>
+          <li>Verilog</li>
+          <li>CUDA (GPU)</li>
+          <li>Python (GPU)</li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+Implemented open-source datasets:
+
+<table style={{width: '100%', borderCollapse: 'collapse', border: 'none'}}>
+  <tbody style={{width: '100%', display: 'table'}}>
+    <tr style={{width: '100%', borderTop: 'none'}}>
+      <td style={{width: '50%', verticalAlign: 'top', padding: '0 10px', border: 'none'}}>
+        <ul style={{padding: '0 0 0 20px', margin: 0}}>
+          <li><a target="_blank" href="https://github.com/openai/human-eval">HumanEval</a></li>
+          <li><a target="_blank" href="https://github.com/nuprl/MultiPL-E">MultiPL-E HumanEval</a></li>
+          <li><a target="_blank" href="https://huggingface.co/datasets/Miaosen/openai-humaneval-sky-shadow">Shadow Humaneval</a></li>
+          <li><a target="_blank" href="https://github.com/google-deepmind/code_contests">CodeContests</a></li>
+          <li><a target="_blank" href="https://github.com/google-research/google-research/tree/master/mbpp">MBPP</a></li>
+          <li><a target="_blank" href="https://github.com/amazon-science/mxeval">MBXP</a></li>
+        </ul>
+      </td>
+      <td style={{width: '50%', verticalAlign: 'top', padding: '0 10px', border: 'none'}}>
+        <ul style={{padding: '0 0 0 20px', margin: 0}}>
+          <li><a target="_blank" href="https://github.com/SparksofAGI/MHPP">MHPP</a></li>
+          <li><a target="_blank" href="https://github.com/facebookresearch/cruxeval">CRUXEval</a></li>
+          <li><a target="_blank" href="https://github.com/THUDM/NaturalCodeBench">NaturalCodeBench</a></li>
+          <li><a target="_blank" href="https://github.com/deepseek-ai/DeepSeek-Coder/tree/main/Evaluation/PAL-Math">PAL-Math</a></li>
+          <li><a target="_blank" href="https://github.com/NVlabs/verilog-eval">verilog-eval</a></li>
+          <li><a target="_blank" href="https://github.com/facebookresearch/miniF2F">miniF2F</a></li>
+        </ul>
+      </td>
+    </tr>
+  </tbody>
+</table>
+
+## Local Deployment
+
+<CodeBlock language="bash">
+docker run -it -p 8080:8080 { constants.image }
+</CodeBlock>
+
+For users in mainland China, the following mirror is provided:
+
+<CodeBlock language="bash">
+docker run -it -p 8080:8080 { constants.cnImage }
+</CodeBlock>
+
+## Usage
+
+### Code Sandbox
+
+:::tip
+
+You can find a simple playground page at { constants.host }/SandboxFusion/playground/sandbox
+
+:::
+
+Execute the following command in the shell to request the sandbox to run a Python code snippet:
+
+export const snippet1 = String.raw`curl '${ constants.host }/run_code' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"code": "print(\"Hello, world!\")", "language": "python"}'
+`
+
+<CodeBlock language="bash">
+{snippet1}
+</CodeBlock>
+
+Sample output:
+
+```json
+{
+  "status": "Success",
+  "message": "",
+  "compile_result": null,
+  "run_result": {
+    "status": "Finished",
+    "execution_time": 0.016735315322875977,
+    "return_code": 0,
+    "stdout": "Hello, world!\n",
+    "stderr": ""
+  },
+  "executor_pod_name": null,
+  "files": {}
+}
+```
+
+You can also make a similar request using a Python script. Here's an example of running C++ code:
+
+export const snippet2 = `import requests
+import json
+
+response = requests.post('${ constants.host }/run_code', json={
+    'code': '''
+#include <iostream>
+
+int main() {
+    std::cout << "Hello, world!" << std::endl;
+    return 0;
+}
+''',
+    'language': 'cpp',
+})
+
+print(json.dumps(response.json(), indent=2))
+`
+
+<CodeBlock language="python">
+{snippet2}
+</CodeBlock>
+
+Sample output:
+
+```json
+{
+  "status": "Success",
+  "message": "",
+  "compile_result": {
+    "status": "Finished",
+    "execution_time": 0.45870447158813477,
+    "return_code": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  "run_result": {
+    "status": "Finished",
+    "execution_time": 0.002761363983154297,
+    "return_code": 0,
+    "stdout": "Hello, world!\n",
+    "stderr": ""
+  },
+  "executor_pod_name": null,
+  "files": {}
+}
+```
+
+### Datasets
+
+:::tip
+
+You can find a simple playground page at { constants.host }/SandboxFusion/playground/datasets
+
+:::
+
+The Datasets module implements evaluation logic for various code datasets and provides a unified interface. Using the MBPP dataset as an example, here's the process of evaluating model outputs through the sandbox service:
+
+Get prompts for all MBPP questions:
+
+export const snippet3 = String.raw`curl '${ constants.host }/get_prompts' \
+  -H 'Content-Type: application/json' \
+  --data-raw '{"dataset":"mbpp","config":{}}'
+`
+
+<CodeBlock language="bash">
+{snippet3}
+</CodeBlock>
+
+Output:
+
+```json
+[
+  {
+    "id": 11,
+    "prompt": "Write a python function to remove first and last occurrence of a given character from the string. Your code should satisfy these tests:\n\nassert remove_Occ(\"hello\",\"l\") == \"heo\"",
+    "labels": {
+      "challenge_test_list": [
+        "assert remove_Occ(\"hellolloll\",\"l\") == \"helollol\"",
+        "assert remove_Occ(\"\",\"l\") == \"\""
+      ],
+      "test_setup_code": ""
+    }
+  },
+  {
+    "id": 12,
+    "prompt": "Write a function to sort a given matrix in ascending order according to the sum of its rows. Your code should satisfy these tests:\n\nassert sort_matrix([[1, 2, 3], [2, 4, 5], [1, 1, 1]])==[[1, 1, 1], [1, 2, 3], [2, 4, 5]]",
+    "labels": {
+      "challenge_test_list": [],
+      "test_setup_code": ""
+    }
+  },
+  ...
+]
+```
+
+Submit the model's output to get the correctness result for the problem:
+
+export const snippet4 = `curl '${ constants.host }/submit' \\
+  -H 'Content-Type: application/json' \\
+  --data-raw '{"dataset":"mbpp","id":"11","completion":"Here is a Python function that removes the first and last occurrence of a given character from a string:\\n\\n\`\`\`python\\ndef remove_Occ(s, char):\\n    first_occ = s.find(char)\\n    last_occ = s.rfind(char)\\n    \\n    if first_occ == -1 or first_occ == last_occ:\\n        return s\\n    \\n    # Remove the first occurrence\\n    s = s[:first_occ] + s[first_occ + 1:]\\n    \\n    # Adjust the index for the last occurrence since the string is now one character shorter\\n    last_occ -= 1\\n    \\n    # Remove the last occurrence\\n    s = s[:last_occ] + s[last_occ + 1:]\\n    \\n    return s\\n\\n# Test the function\\nassert remove_Occ(\\"hello\\", \\"l\\") == \\"heo\\"\\n\`\`\`\\n\\nThis function works as follows:\\n1. It finds the index of the first occurrence of the given character.\\n2. It finds the index of the last occurrence of the given character.\\n3. If the character does not exist in the string or only occurs once, it simply returns the original string.\\n4. Otherwise, it constructs a new string by removing the first occurrence and then adjusts the index for the last occurrence before removing it.\\n\\nYou can run the provided test to ensure the function works as expected.","config":{}}'
+`
+
+<CodeBlock language="bash">
+{snippet4}
+</CodeBlock>
+
+Output:
+
+```json
+{
+  "id": "11",
+  "accepted": true,
+  "extracted_code": "def remove_Occ(s, char):\n    first_occ = s.find(char)\n    last_occ = s.rfind(char)\n    \n    if first_occ == -1 or first_occ == last_occ:\n        return s\n    \n    # Remove the first occurrence\n    s = s[:first_occ] + s[first_occ + 1:]\n    \n    # Adjust the index for the last occurrence since the string is now one character shorter\n    last_occ -= 1\n    \n    # Remove the last occurrence\n    s = s[:last_occ] + s[last_occ + 1:]\n    \n    return s\n\n# Test the function\nassert remove_Occ(\"hello\", \"l\") == \"heo\"",
+  "full_code": "def remove_Occ(s, char):\n    first_occ = s.find(char)\n    last_occ = s.rfind(char)\n    \n    if first_occ == -1 or first_occ == last_occ:\n        return s\n    \n    # Remove the first occurrence\n    s = s[:first_occ] + s[first_occ + 1:]\n    \n    # Adjust the index for the last occurrence since the string is now one character shorter\n    last_occ -= 1\n    \n    # Remove the last occurrence\n    s = s[:last_occ] + s[last_occ + 1:]\n    \n    return s\n\n# Test the function\nassert remove_Occ(\"hello\", \"l\") == \"heo\"\n\nassert remove_Occ(\"hello\",\"l\") == \"heo\"\nassert remove_Occ(\"abcda\",\"a\") == \"bcd\"\nassert remove_Occ(\"PHP\",\"P\") == \"H\"",
+  "test_code": null,
+  "tests": [
+    {
+      "passed": true,
+      "exec_info": {
+        "status": "Success",
+        "message": "",
+        "compile_result": null,
+        "run_result": {
+          "status": "Finished",
+          "execution_time": 0.017310619354248047,
+          "return_code": 0,
+          "stdout": "",
+          "stderr": ""
+        },
+        "executor_pod_name": null,
+        "files": {}
+      },
+      "test_info": null
+    }
+  ],
+  "extracted_type": null,
+  "extra": null
+}
+```

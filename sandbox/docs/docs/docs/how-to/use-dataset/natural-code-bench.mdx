@@ -1,0 +1,26 @@
+---
+sidebar_position: 12
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# NaturalCodeBench
+
+This dataset is proposed in [NaturalCodeBench: Examining Coding Performance Mismatch on HumanEval and Natural User Prompts](https://arxiv.org/abs/2405.04520).
+
+The dataset provides a total of 402 questions in four combinations of Python/Java and Chinese/English, with 70 questions in each combination. For more details, see the original paper. NCB has a total of 402 questions, of which 140 questions in the development set are open-sourced, while the remaining 262 questions in the test set are not open. Here, we only test the metrics of the development set, while the paper provides the metrics of the test set.
+
+Two questions in the Python section have been deleted:
+
+- 30: It uses the sparse parameter of OneHotEncoder in sklearn, which has been deprecated since version 0.2.7.
+- 56: The original standard answer failed to pass the test.
+
+Note: Some Python questions rely on external files, which are not given in the official Repo but exist in the container image. These files have also been extracted and placed in the asset of the corresponding sample.
+
+A modified version of dataset is uploaded to huggingface.
+
+<DatasetSelector datasetKey="NaturalCodeBench" generateDocFunc={docWithType} configFields={[
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  run_timeout: 40,
+}} />

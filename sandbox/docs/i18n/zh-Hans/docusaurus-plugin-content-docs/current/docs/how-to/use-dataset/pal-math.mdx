@@ -1,0 +1,17 @@
+---
+sidebar_position: 13
+---
+import DatasetSelector from '@site/src/components/DatasetSelector';
+import { docWithType } from '@site/src/components/DatasetSelector/docGenerator';
+
+# PAL-Math
+
+This dataset refers to the Deepseek Coder's [PAL-Math](https://github.com/deepseek-ai/DeepSeek-Coder/tree/main/Evaluation/PAL-Math) implementation, which enables LLMs to solve math problems with python code. Seven datasets are included: GSM8k, MATH, GSM-Hard, SVAMP, TabMWP, ASDiv, and MAWPS.
+
+<DatasetSelector datasetKey="PALMath" generateDocFunc={docWithType} configFields={[
+  { name: 'compile_timeout', type: 'number', description: 'Compilation timeout in seconds' },
+  { name: 'run_timeout', type: 'number', description: 'Execution timeout in seconds' },
+]} initialConfig={{
+  compile_timeout: 20,
+  run_timeout: 20,
+}} />
