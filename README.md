@@ -10,6 +10,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 2026-05-21: The Spreadsheet-RL arXiv preprint is available at [arXiv:2605.22642](https://arxiv.org/abs/2605.22642), and the paper is featured on [Hugging Face Daily Papers](https://huggingface.co/papers/2605.22642).
 - 2026-05-17: Code and dataset release for Spreadsheet-RL. The code is available on GitHub at [Spreadsheet-RL/Spreadsheet-RL](https://github.com/Spreadsheet-RL/Spreadsheet-RL), with training configs, Slurm scripts, the Excel reward service, SandboxFusion setup, and the `verl` integration. The dataset is available on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL](https://huggingface.co/datasets/Spreadsheet-RL/Spreadsheet-RL), with parquet splits and workbook files.
 
 This code release contains the training and evaluation stack used by the Spreadsheet-RL paper:
