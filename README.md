@@ -1,6 +1,10 @@
 # Spreadsheet-RL
 
 <p>
+<a href="https://arxiv.org/abs/2605.22642"><img src="https://img.shields.io/badge/arXiv-2605.22642-b31b1b.svg?style=for-the-badge" alt="arXiv"></a>
+<a href="https://spreadsheet-rl.github.io/"><img src="https://img.shields.io/badge/Project%20Page-Spreadsheet--RL-2088FF.svg?style=for-the-badge" alt="Project Page"></a>
+<a href="https://huggingface.co/datasets/Spreadsheet-RL/Spreadsheet-RL"><img src="https://img.shields.io/badge/Dataset-Spreadsheet--RL-FFD21E.svg?style=for-the-badge" alt="Hugging Face Dataset"></a>
+<a href="https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B"><img src="https://img.shields.io/badge/Model-Spreadsheet--RL--4B-FFD21E.svg?style=for-the-badge" alt="Hugging Face Model"></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/License-CC%20BY--SA%204.0-lightgrey.svg?style=for-the-badge" alt="License: CC BY-SA 4.0"></a>
 </p>
 
@@ -190,3 +194,13 @@ Spreadsheet-RL builds on:
 ## License
 
 Top-level Spreadsheet-RL release material is distributed under the [Creative Commons Attribution-ShareAlike 4.0 International License](LICENSE). Vendored components retain their upstream licenses; see [verl/LICENSE](verl/LICENSE) and [sandbox/LICENSE](sandbox/LICENSE).
+
+---
+
+<p>
+<a href="https://arxiv.org/abs/2605.22642"><img src="https://img.shields.io/badge/arXiv-2605.22642-b31b1b.svg?style=for-the-badge" alt="arXiv"></a>
+<a href="https://spreadsheet-rl.github.io/"><img src="https://img.shields.io/badge/Project%20Page-Spreadsheet--RL-2088FF.svg?style=for-the-badge" alt="Project Page"></a>
+<a href="https://huggingface.co/datasets/Spreadsheet-RL/Spreadsheet-RL"><img src="https://img.shields.io/badge/Dataset-Spreadsheet--RL-FFD21E.svg?style=for-the-badge" alt="Hugging Face Dataset"></a>
+<a href="https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B"><img src="https://img.shields.io/badge/Model-Spreadsheet--RL--4B-FFD21E.svg?style=for-the-badge" alt="Hugging Face Model"></a>
+<a href="LICENSE"><img src="https://img.shields.io/badge/License-CC%20BY--SA%204.0-lightgrey.svg?style=for-the-badge" alt="License: CC BY-SA 4.0"></a>
+</p>
