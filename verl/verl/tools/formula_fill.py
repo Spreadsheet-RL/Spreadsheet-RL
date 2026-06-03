@@ -603,7 +603,7 @@ def _fill_formula_in_workbook_unlocked_sync(
     wb = None
     try:
         try:
-            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=False)
+            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
         except Exception as exc:
             raise RuntimeError(f"failed to load workbook: {exc}") from None
 

@@ -414,7 +414,7 @@ def _delete_rows_in_workbook(
             orig_mode = 0o644
 
         try:
-            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=False)
+            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
         except Exception as exc:
             raise RuntimeError(f"failed to load workbook: {exc}") from None
 
@@ -530,7 +530,7 @@ def _delete_columns_in_workbook(
             orig_mode = 0o644
 
         try:
-            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=False)
+            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
         except Exception as exc:
             raise RuntimeError(f"failed to load workbook: {exc}") from None
 

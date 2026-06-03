@@ -430,7 +430,7 @@ def _clear_range_in_workbook(
             raise RuntimeError(f"workbook rejected by zip safety checks: {zip_error}")
 
         try:
-            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=False)
+            wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
         except Exception as exc:
             raise RuntimeError(f"failed to load workbook: {exc}") from None
 
