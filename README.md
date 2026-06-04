@@ -14,6 +14,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 2026-06-03: Refreshed the released dataset by recalculating all workbook artifacts and removing samples with abnormal recalculation behavior, including excessive latency and memory usage; the parquet splits and workbook archive metadata have been regenerated.
 - 2026-05-23: Released the Spreadsheet-RL-4B model checkpoint on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL-4B](https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B), the RL-trained `Qwen/Qwen3-4B-Thinking-2507` spreadsheet agent used in the paper.
 - 2026-05-22: The Spreadsheet-RL project page is now live at [https://spreadsheet-rl.github.io/](https://spreadsheet-rl.github.io/), with the paper overview, framework, results, resources, and citation.
 - 2026-05-21: The Spreadsheet-RL arXiv preprint is available at [arXiv:2605.22642](https://arxiv.org/abs/2605.22642), and the paper is featured on [Hugging Face Daily Papers](https://huggingface.co/papers/2605.22642).
@@ -31,7 +32,7 @@ This code release contains the training and evaluation stack used by the Spreads
 
 Spreadsheet-RL combines three pieces:
 
-- `Spreadsheet Data Agent`: an automated data-construction pipeline that turns public spreadsheet forum problems into paired initial and oracle final workbooks. The paper's training set contains 5,928 filtered ExcelForum tasks from raw public threads collected after January 1, 2024.
+- `Spreadsheet Data Agent`: an automated data-construction pipeline that turns public spreadsheet forum problems into paired initial and oracle final workbooks. The released training split contains 5,925 filtered ExcelForum tasks from raw public threads collected after January 1, 2024.
 - `Spreadsheet Gym`: a multi-turn Microsoft Excel environment with per-rollout isolated workspaces, SandboxFusion-backed code execution, spreadsheet-native tools, and an async Excel reward service.
 - `Spreadsheet-RL training`: GRPO post-training for spreadsheet agents using outcome rewards computed from final workbook correctness.
 
@@ -98,17 +99,17 @@ The released dataset is hosted at [`Spreadsheet-RL/Spreadsheet-RL`](https://hugg
 
 | File | Rows | Meaning |
 | --- | ---: | --- |
-| `train_hermes.parquet` | 5,928 | training split with Hermes tool-call formatting |
-| `train_qwen3_coder.parquet` | 5,928 | training split with Qwen3-Coder tool-call formatting |
-| `test_hermes.parquet` | 2,726 | SpreadsheetBench evaluation split with Hermes formatting |
-| `test_qwen3_coder.parquet` | 2,726 | SpreadsheetBench evaluation split with Qwen3-Coder formatting |
+| `train_hermes.parquet` | 5,925 | training split with Hermes tool-call formatting |
+| `train_qwen3_coder.parquet` | 5,925 | training split with Qwen3-Coder tool-call formatting |
+| `test_hermes.parquet` | 2,722 | SpreadsheetBench evaluation split with Hermes formatting |
+| `test_qwen3_coder.parquet` | 2,722 | SpreadsheetBench evaluation split with Qwen3-Coder formatting |
 | `test_domain_hermes.parquet` | 1,662 | Domain-Spreadsheet evaluation split with Hermes formatting |
 | `test_domain_qwen3_coder.parquet` | 1,662 | Domain-Spreadsheet evaluation split with Qwen3-Coder formatting |
-| `spreadsheets.zip` | 10,316 tasks | workbook files and task metadata |
+| `spreadsheets.zip` | 10,309 tasks | workbook files and task metadata |
 
 Parquet filenames follow `train_<parser_type>.parquet`, `test_<parser_type>.parquet`, and `test_domain_<parser_type>.parquet`. In the paper, `train` is the training split, `test` is SpreadsheetBench, and `test_domain` is Domain-Spreadsheet. The parquet schema is `data_source`, `agent_name`, `prompt`, `ability`, `reward_model`, and `extra_info`.
 
-`spreadsheets.zip` expands to `excelforum/`, `spreadsheetbench/`, and `domain/`. Each task directory contains `instruction.json`, `input.xlsx`, `output.xlsx`, and `target.xlsx`. The archive contains 5,928 ExcelForum training tasks, 2,726 SpreadsheetBench tasks, and 1,662 Domain-Spreadsheet tasks.
+`spreadsheets.zip` expands to `excelforum/`, `spreadsheetbench/`, and `domain/`. Each task directory contains `instruction.json`, `input.xlsx`, `output.xlsx`, and `target.xlsx`. The archive contains 5,925 ExcelForum training tasks, 2,722 SpreadsheetBench tasks, and 1,662 Domain-Spreadsheet tasks.
 
 The default Qwen3 4B launcher trains on `train_hermes.parquet` and validates on `test_hermes.parquet` from `SPREADSHEET_RL_DATA_ROOT`. For Domain-Spreadsheet validation, set `TEST_FILE=test_domain_hermes.parquet`. For Qwen3-Coder parser data, use the corresponding `*_qwen3_coder.parquet` files and set `actor_rollout_ref.rollout.multi_turn.format=qwen3_coder`.
 
