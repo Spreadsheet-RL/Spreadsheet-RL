@@ -14,11 +14,11 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
-- 2026-06-03: Refreshed the released dataset by recalculating all workbook artifacts and removing samples with abnormal recalculation behavior, including excessive latency and memory usage; the parquet splits and workbook archive metadata have been regenerated.
-- 2026-05-23: Released the Spreadsheet-RL-4B model checkpoint on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL-4B](https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B), the RL-trained `Qwen/Qwen3-4B-Thinking-2507` spreadsheet agent used in the paper.
-- 2026-05-22: The Spreadsheet-RL project page is now live at [https://spreadsheet-rl.github.io/](https://spreadsheet-rl.github.io/), with the paper overview, framework, results, resources, and citation.
-- 2026-05-21: The Spreadsheet-RL arXiv preprint is available at [arXiv:2605.22642](https://arxiv.org/abs/2605.22642), and the paper is featured on [Hugging Face Daily Papers](https://huggingface.co/papers/2605.22642).
-- 2026-05-17: Code and dataset release for Spreadsheet-RL. The code is available on GitHub at [Spreadsheet-RL/Spreadsheet-RL](https://github.com/Spreadsheet-RL/Spreadsheet-RL), with training configs, Slurm scripts, the Excel reward service, SandboxFusion setup, and the `verl` integration. The dataset is available on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL](https://huggingface.co/datasets/Spreadsheet-RL/Spreadsheet-RL), with parquet splits and workbook files.
+- 🔄 2026-06-03: Refreshed spreadsheet artifacts, removing samples with abnormal recalculation behavior, including excessive latency and memory usage; corresponding parquet splits are also updated.
+- 🚀 2026-05-23: Released the Spreadsheet-RL-4B model checkpoint on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL-4B](https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B), the RL-trained `Qwen/Qwen3-4B-Thinking-2507` spreadsheet agent used in the paper.
+- 🌐 2026-05-22: The Spreadsheet-RL project page is now live at [https://spreadsheet-rl.github.io/](https://spreadsheet-rl.github.io/), with the paper overview, framework, results, resources, and citation.
+- 📄 2026-05-21: The Spreadsheet-RL arXiv preprint is available at [arXiv:2605.22642](https://arxiv.org/abs/2605.22642), and the paper is featured on [Hugging Face Daily Papers](https://huggingface.co/papers/2605.22642).
+- 📦 2026-05-17: Code and dataset release for Spreadsheet-RL. The code is available on GitHub at [Spreadsheet-RL/Spreadsheet-RL](https://github.com/Spreadsheet-RL/Spreadsheet-RL), with training configs, Slurm scripts, the Excel reward service, SandboxFusion setup, and the `verl` integration. The dataset is available on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL](https://huggingface.co/datasets/Spreadsheet-RL/Spreadsheet-RL), with parquet splits and workbook files.
 
 This code release contains the training and evaluation stack used by the Spreadsheet-RL paper:
 
