@@ -1,5 +1,9 @@
 # Spreadsheet-RL
 
+<p align="center">
+  <img src="assets/spreadsheet-rl.png" alt="Spreadsheet-RL logo" width="700">
+</p>
+
 <p>
 <a href="https://arxiv.org/abs/2605.22642"><img src="https://img.shields.io/badge/arXiv-2605.22642-b31b1b.svg?style=for-the-badge" alt="arXiv"></a>
 <a href="https://spreadsheet-rl.github.io/"><img src="https://img.shields.io/badge/Project%20Page-Spreadsheet--RL-2088FF.svg?style=for-the-badge" alt="Project Page"></a>
