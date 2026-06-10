@@ -17,9 +17,12 @@ tools:
             path:
               type: "string"
               description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+            sheet_name:
+              type: "string"
+              description: "Optional worksheet name. If range includes a sheet name, it must match sheet_name."
             range:
               type: "string"
-              description: "A1 range to inspect (e.g. A1:C3 or Sheet1!B2:D10)."
+              description: "A1 range to inspect (e.g. A1:C3 or Sheet1!B2:D10). If it does not include a sheet name, uses sheet_name (or the first worksheet by default). Inspects at most 400 cells."
             include_details:
               type: "boolean"
               description: "If true, include formatting and overlapping sheet metadata (merged cells, conditional formatting, validations, etc.). Default false."

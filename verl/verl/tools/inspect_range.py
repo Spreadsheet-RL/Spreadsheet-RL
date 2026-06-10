@@ -1374,6 +1374,20 @@ class InspectRangeTool(BaseTool):
                 "error": "invalid_range",
             }
         range_token = range_token_raw.strip()
+        sheet_name_raw = parameters.get("sheet_name")
+        sheet_name: Optional[str] = None
+        if sheet_name_raw is not None:
+            if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
+                return ToolResponse(text="Error: sheet_name must be a non-empty string."), 0.0, {
+                    "status": "error",
+                    "error": "invalid_sheet_name",
+                }
+            sheet_name = _normalize_sheet_name(sheet_name_raw)
+            if not sheet_name:
+                return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
+                    "status": "error",
+                    "error": "invalid_sheet_name",
+                }
         include_details_raw = parameters.get("include_details", False)
         if not isinstance(include_details_raw, bool):
             return ToolResponse(text="Error: include_details must be a boolean."), 0.0, {
@@ -1390,7 +1404,19 @@ class InspectRangeTool(BaseTool):
             }
 
         try:
-            _, cell_range = _parse_sheet_cell_range(range_token, default_sheet_name="Sheet1")
+            has_sheet_qualified_range = "!" in range_token
+            requested_sheet, cell_range = _parse_sheet_cell_range(
+                range_token,
+                default_sheet_name=sheet_name or "Sheet1",
+            )
+            if sheet_name is not None:
+                if has_sheet_qualified_range:
+                    if requested_sheet.casefold() != sheet_name.casefold():
+                        return ToolResponse(
+                            text=f"Error: sheet_name {sheet_name!r} does not match range sheet {requested_sheet!r}."
+                        ), 0.0, {"status": "error", "error": "sheet_mismatch"}
+                else:
+                    range_token = f"{_quote_sheet_name_for_a1(sheet_name)}!{cell_range}"
             boundaries = range_boundaries(cell_range if ":" in cell_range else f"{cell_range}:{cell_range}")
             filled = _fill_missing_boundaries(boundaries)
             min_col, min_row, max_col, max_row = filled
