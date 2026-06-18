@@ -177,7 +177,7 @@ export SPREADSHEET_RL_WORKSPACES_DIR='/shared/spreadsheet_rl_workspaces/${SLURM_
 
 ## Citation
 
-If you use Spreadsheet-RL in academic work, please cite:
+If you use Spreadsheet-RL, including its data, environment, model, or training code, please consider citing our paper:
 
 ```bibtex
 @misc{chi2026spreadsheetrl,
