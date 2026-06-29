@@ -19,7 +19,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
+from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
@@ -40,6 +40,8 @@ _A1_RANGE_RE = re.compile(
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
 _SAFE_SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+DEFAULT_MAX_RESPONSE_CHARS = 4096
+MAX_RESPONSE_CHARS = 8192
 
 
 def _sanitize_relpath(value: Any) -> Optional[Path]:
@@ -66,7 +68,7 @@ def _resolve_workspace_file(
     if not workspace_id:
         return None
 
-    workspace_base = get_spreadsheet_rl_data_root()
+    workspace_base = get_sheet_arena_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -130,7 +132,7 @@ def _add_query_params(url: str, params: dict[str, str]) -> str:
 
 
 def _get_poll_wait_s() -> float:
-    value = os.environ.get("SPREADSHEET_RL_RECALC_POLL_WAIT_S", "10")
+    value = os.environ.get("SHEET_ARENA_RECALC_POLL_WAIT_S", "10")
     try:
         poll_wait_s = float(value)
         return min(max(0.0, poll_wait_s), 25.0)
@@ -139,7 +141,7 @@ def _get_poll_wait_s() -> float:
 
 
 def _get_submit_retry_interval_s() -> float:
-    value = os.environ.get("SPREADSHEET_RL_RECALC_SUBMIT_RETRY_INTERVAL_S", "20")
+    value = os.environ.get("SHEET_ARENA_RECALC_SUBMIT_RETRY_INTERVAL_S", "20")
     try:
         retry_s = float(value)
         return max(0.1, retry_s)
@@ -148,7 +150,7 @@ def _get_submit_retry_interval_s() -> float:
 
 
 def _get_max_read_cells() -> int:
-    value = os.environ.get("SPREADSHEET_RL_RECALC_MAX_READ_CELLS", "100")
+    value = os.environ.get("SHEET_ARENA_RECALC_MAX_READ_CELLS", "100")
     try:
         n = int(value)
         return min(max(1, n), 10_000)
@@ -160,19 +162,19 @@ def _get_max_response_chars(config: Optional[dict[str, Any]] = None) -> int:
     config_value = None
     if isinstance(config, dict):
         config_value = config.get("max_response_chars")
-    for raw in (config_value, os.environ.get("SPREADSHEET_RL_TOOL_MAX_RESPONSE_CHARS", "").strip()):
+    for raw in (config_value, os.environ.get("SHEET_ARENA_TOOL_MAX_RESPONSE_CHARS", "").strip()):
         if raw is None:
             continue
         try:
             n = int(raw)
-            return min(max(128, n), 1000)
+            return min(max(128, n), MAX_RESPONSE_CHARS)
         except (TypeError, ValueError):
             continue
-    return 900
+    return DEFAULT_MAX_RESPONSE_CHARS
 
 
 def _get_max_string_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_TOOL_MAX_STRING_CHARS", "200").strip()
+    raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
         n = int(raw)
         return min(max(16, n), 100_000)
@@ -235,8 +237,7 @@ def _scan_zip_metadata_bytes(
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -249,6 +250,52 @@ def _scan_zip_metadata_bytes(
     except Exception as exc:
         return f"failed to read zip metadata: {exc}"
 
+    return None
+
+
+def _scan_xlsx_container_bytes(content: bytes) -> Optional[str]:
+    try:
+        import zipfile
+    except ImportError:
+        return None
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as zf:
+            names = {str(name).replace("\\", "/") for name in zf.namelist()}
+    except zipfile.BadZipFile:
+        return "invalid zip file"
+    except Exception as exc:
+        return f"failed to read xlsx container: {exc}"
+
+    required = ("[Content_Types].xml", "xl/workbook.xml")
+    for member in required:
+        if member not in names:
+            return f"missing required xlsx member: {member}"
+    if not any(name.startswith("xl/worksheets/") and name.endswith(".xml") for name in names):
+        return "missing worksheet parts"
+    return None
+
+
+def _scan_xlsx_loadable_bytes(content: bytes) -> Optional[str]:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return None
+
+    wb = None
+    try:
+        wb = load_workbook(filename=io.BytesIO(content), data_only=False, read_only=True, keep_links=False)
+        worksheets = getattr(wb, "worksheets", None) or []
+        if not worksheets:
+            return "workbook has no worksheets"
+    except Exception as exc:
+        return f"failed to load workbook: {exc}"
+    finally:
+        if wb is not None:
+            try:
+                wb.close()
+            except Exception:
+                pass
     return None
 
 
@@ -293,8 +340,7 @@ def _scan_zip_metadata(
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -341,7 +387,7 @@ def _sample_linear_indices(total: int, *, head: int, tail: int) -> list[int]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
+    name = value.strip(' \t\n\r\f\v"')
     if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
         name = name[1:-1].replace("''", "'")
         return name.strip()
@@ -360,7 +406,7 @@ def _normalize_cell_range(value: str) -> str:
 
 
 def _parse_sheet_cell_range(token: str, *, default_sheet_name: str) -> tuple[str, str]:
-    token = token.strip(" \t\n\r\f\v\"")
+    token = token.strip(' \t\n\r\f\v"')
     if not token:
         raise ValueError("empty cell range")
 
@@ -853,10 +899,7 @@ def _post_recalculate(
         else:
             filename = "workbook.xlsx"
     filename = filename.replace('"', "_").replace("\r", "_").replace("\n", "_")
-    mime_type = (
-        mimetypes.guess_type(filename)[0]
-        or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    mime_type = mimetypes.guess_type(filename)[0] or "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
     boundary = uuid.uuid4().hex
 
@@ -1139,12 +1182,45 @@ def _post_recalculate(
             backoff_s = min(backoff_s * 2, 5.0)
 
 
+def _recalculate_workbook_for_commit(
+    *,
+    url: str,
+    file_path: Path,
+    filename: Optional[str] = None,
+    timeout_s: float,
+    max_response_bytes: Optional[int] = None,
+) -> bytes:
+    recalc_content = _post_recalculate(
+        url=url,
+        file_path=file_path,
+        filename=filename,
+        timeout_s=timeout_s,
+        max_response_bytes=max_response_bytes,
+    )
+    zip_error = _scan_zip_metadata_bytes(
+        recalc_content,
+        max_members=50_000,
+        max_total_uncompressed_bytes=512 * 1024 * 1024,
+        max_member_uncompressed_bytes=128 * 1024 * 1024,
+        max_ratio=200.0,
+    )
+    if zip_error:
+        raise RuntimeError(f"recalculated workbook rejected by zip safety checks: {zip_error}")
+    xlsx_error = _scan_xlsx_container_bytes(recalc_content)
+    if xlsx_error:
+        raise RuntimeError(f"recalculated workbook rejected by xlsx safety checks: {xlsx_error}")
+    load_error = _scan_xlsx_loadable_bytes(recalc_content)
+    if load_error:
+        raise RuntimeError(f"recalculated workbook rejected by xlsx load checks: {load_error}")
+    return recalc_content
+
+
 class RecalculateAndReadTool(BaseTool):
     def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
         super().__init__(config, tool_schema)
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
+            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         timeout_raw = config.get("timeout_s", 180)
@@ -1194,10 +1270,14 @@ class RecalculateAndReadTool(BaseTool):
             if rel is None:
                 return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
         if rel.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         cell_ranges_raw = parameters.get("cell_ranges")
         if not isinstance(cell_ranges_raw, list):
@@ -1216,10 +1296,14 @@ class RecalculateAndReadTool(BaseTool):
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
         target_file = _resolve_workspace_file(
             workspace_id=workspace_id,
             relpath=rel,
@@ -1235,23 +1319,35 @@ class RecalculateAndReadTool(BaseTool):
             try:
                 file_size = target_file.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to stat file: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "stat_failed",
+                    },
+                )
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return (
+                    ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "file_too_large",
+                    },
+                )
 
         if not self.recalc_url:
-            return ToolResponse(text="Error: recalc_url is not configured."), 0.0, {
-                "status": "error",
-                "error": "missing_url",
-            }
+            return (
+                ToolResponse(text="Error: recalc_url is not configured."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_url",
+                },
+            )
 
         try:
             expected_sig, request_bytes = await asyncio.to_thread(
@@ -1263,10 +1359,14 @@ class RecalculateAndReadTool(BaseTool):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return ToolResponse(text=f"Error: failed to read workbook: {exc}"), 0.0, {
-                "status": "error",
-                "error": "stat_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: failed to read workbook: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "stat_failed",
+                },
+            )
 
         zip_error = await asyncio.to_thread(
             _scan_zip_metadata_bytes,
@@ -1277,10 +1377,14 @@ class RecalculateAndReadTool(BaseTool):
             max_ratio=200.0,
         )
         if zip_error:
-            return ToolResponse(text=f"Error: workbook rejected by zip safety checks: {zip_error}"), 0.0, {
-                "status": "error",
-                "error": "zip_limits_exceeded",
-            }
+            return (
+                ToolResponse(text=f"Error: workbook rejected by zip safety checks: {zip_error}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "zip_limits_exceeded",
+                },
+            )
 
         try:
             content = await asyncio.to_thread(
@@ -1292,10 +1396,14 @@ class RecalculateAndReadTool(BaseTool):
                 max_response_bytes=self.max_file_size_bytes,
             )
         except (urllib.error.URLError, urllib.error.HTTPError, OSError, RuntimeError, TimeoutError, ValueError) as exc:
-            return ToolResponse(text=f"Error: recalculate request failed: {exc}"), 0.0, {
-                "status": "error",
-                "error": "request_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: recalculate request failed: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "request_failed",
+                },
+            )
 
         try:
             read_values, read_errors = await asyncio.to_thread(
@@ -1306,10 +1414,14 @@ class RecalculateAndReadTool(BaseTool):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return ToolResponse(text=f"Error: failed to read recalculated values: {exc}"), 0.0, {
-                "status": "error",
-                "error": "read_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: failed to read recalculated values: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "read_failed",
+                },
+            )
 
         updated = False
         writeback_error = None
@@ -1328,7 +1440,11 @@ class RecalculateAndReadTool(BaseTool):
             writeback_error = f"failed to write updated file: {exc}"
 
         values_source = "recalc_response"
-        if writeback_error is not None and not updated and "workbook changed since recalc request" in str(writeback_error):
+        if (
+            writeback_error is not None
+            and not updated
+            and "workbook changed since recalc request" in str(writeback_error)
+        ):
             try:
                 _, live_bytes = await asyncio.to_thread(
                     _read_workbook_bytes_under_lock_sync,

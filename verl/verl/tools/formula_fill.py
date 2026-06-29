@@ -16,11 +16,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
+from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
-from .formula_fill_core import fill_formula
+from .formula_fill_core import fill_formula, normalize_formula_for_excel
 from .recalculate import _post_recalculate, _scan_zip_metadata_bytes
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
 
@@ -29,6 +29,8 @@ _EXCEL_MAX_COLS = 16_384
 
 _A1_CELL_RE = re.compile(r"^([A-Z]{1,3})([0-9]{1,7})$")
 _SAFE_SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+DEFAULT_MAX_RESPONSE_CHARS = 4096
+MAX_RESPONSE_CHARS = 8192
 
 
 def _col_letter_to_index(col: str) -> int:
@@ -54,7 +56,7 @@ def _parse_a1_cell(value: str) -> tuple[str, int]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
+    name = value.strip(' \t\n\r\f\v"')
     if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
         name = name[1:-1].replace("''", "'")
         return name.strip()
@@ -74,7 +76,7 @@ def _quote_sheet_name_for_a1(sheet_name: str) -> str:
 
 
 def _split_sheet_cell(value: str) -> tuple[Optional[str], str]:
-    token = value.strip(" \t\n\r\f\v\"")
+    token = value.strip(' \t\n\r\f\v"')
     if not token:
         raise ValueError("empty cell")
     if "!" not in token:
@@ -108,7 +110,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_spreadsheet_rl_data_root()
+    workspace_base = get_sheet_arena_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -183,7 +185,7 @@ def _resolve_target_worksheet(wb, requested_name: str):
 
 
 def _get_max_string_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_TOOL_MAX_STRING_CHARS", "200").strip()
+    raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
         n = int(raw)
         return min(max(16, n), 100_000)
@@ -195,15 +197,15 @@ def _get_max_response_chars(config: Optional[dict[str, Any]] = None) -> int:
     config_value = None
     if isinstance(config, dict):
         config_value = config.get("max_response_chars")
-    for raw in (config_value, os.environ.get("SPREADSHEET_RL_TOOL_MAX_RESPONSE_CHARS", "").strip()):
+    for raw in (config_value, os.environ.get("SHEET_ARENA_TOOL_MAX_RESPONSE_CHARS", "").strip()):
         if raw is None:
             continue
         try:
             n = int(raw)
-            return min(max(128, n), 1000)
+            return min(max(128, n), MAX_RESPONSE_CHARS)
         except (TypeError, ValueError):
             continue
-    return 900
+    return DEFAULT_MAX_RESPONSE_CHARS
 
 
 def _json_dumps_compact(payload: Any) -> str:
@@ -257,6 +259,10 @@ def _sample_indices(total: int, *, head: int, tail: int) -> list[int]:
     indices = list(range(head_n))
     indices.extend(range(total - tail_n, total))
     return indices
+
+
+def _normalize_formula_template_for_excel(formula: str) -> str:
+    return normalize_formula_for_excel(formula)
 
 
 def _file_signature(file_path: Path) -> tuple[int, int, int, int]:
@@ -466,8 +472,7 @@ def _scan_zip_metadata(
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -736,7 +741,9 @@ def _truncate_payload_to_max_chars(payload: dict[str, Any], max_chars: int) -> s
     samples_out = payload.get("samples")
     if len(response_text) > max_chars and isinstance(samples_out, list) and samples_out:
         addr = samples_out[0].get("address") if isinstance(samples_out[0], dict) else None
-        payload["samples"] = [{"address": addr, "formula": None, "value": None}] if isinstance(addr, str) and addr else []
+        payload["samples"] = (
+            [{"address": addr, "formula": None, "value": None}] if isinstance(addr, str) and addr else []
+        )
         response_text = _json_dumps_compact(payload)
 
     return response_text
@@ -765,7 +772,7 @@ class FillFormulaTool(BaseTool):
 
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
+            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
@@ -791,17 +798,25 @@ class FillFormulaTool(BaseTool):
             if relpath is None:
                 return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
         if relpath.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         start_cell_raw = parameters.get("start_cell")
         if not isinstance(start_cell_raw, str) or not start_cell_raw.strip():
-            return ToolResponse(text="Error: start_cell must be a non-empty A1 cell (e.g. D2 or Sheet1!D2)."), 0.0, {
-                "status": "error",
-                "error": "invalid_start_cell",
-            }
+            return (
+                ToolResponse(text="Error: start_cell must be a non-empty A1 cell (e.g. D2 or Sheet1!D2)."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_start_cell",
+                },
+            )
 
         sheet_from_cell = None
         try:
@@ -813,20 +828,32 @@ class FillFormulaTool(BaseTool):
         sheet_name = None
         if sheet_name_raw is not None:
             if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-                return ToolResponse(text="Error: sheet_name must be a non-empty string."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name must be a non-empty string."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             sheet_name = _normalize_sheet_name(sheet_name_raw)
             if not sheet_name:
-                return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name is empty after normalization."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             if sheet_from_cell is not None and sheet_name.casefold() != sheet_from_cell.casefold():
-                return ToolResponse(
-                    text=f"Error: sheet_name {sheet_name!r} does not match start_cell sheet {sheet_from_cell!r}."
-                ), 0.0, {"status": "error", "error": "sheet_mismatch"}
+                return (
+                    ToolResponse(
+                        text=f"Error: sheet_name {sheet_name!r} does not match start_cell sheet {sheet_from_cell!r}."
+                    ),
+                    0.0,
+                    {"status": "error", "error": "sheet_mismatch"},
+                )
         elif sheet_from_cell is not None:
             sheet_name = sheet_from_cell
 
@@ -835,13 +862,18 @@ class FillFormulaTool(BaseTool):
 
         formula_template_raw = parameters.get("formula_template")
         if not isinstance(formula_template_raw, str) or not formula_template_raw.strip():
-            return ToolResponse(text="Error: formula_template must be a non-empty string."), 0.0, {
-                "status": "error",
-                "error": "invalid_formula_template",
-            }
+            return (
+                ToolResponse(text="Error: formula_template must be a non-empty string."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_formula_template",
+                },
+            )
         formula_template = formula_template_raw.strip()
         if not formula_template.startswith("="):
             formula_template = "=" + formula_template
+        formula_template = _normalize_formula_template_for_excel(formula_template)
         max_formula_chars_raw = self.config.get("max_formula_template_chars", 8192)
         max_formula_chars: Optional[int] = None
         if max_formula_chars_raw is not None:
@@ -852,10 +884,13 @@ class FillFormulaTool(BaseTool):
             if max_formula_chars <= 0:
                 max_formula_chars = None
         if max_formula_chars is not None and len(formula_template) > max_formula_chars:
-            return ToolResponse(
-                text="Error: formula_template too long "
-                f"(len={len(formula_template)} > {max_formula_chars})."
-            ), 0.0, {"status": "error", "error": "formula_template_too_long"}
+            return (
+                ToolResponse(
+                    text=f"Error: formula_template too long (len={len(formula_template)} > {max_formula_chars})."
+                ),
+                0.0,
+                {"status": "error", "error": "formula_template_too_long"},
+            )
 
         normalized_start_cell = start_cell_token.strip().upper().replace("$", "")
         try:
@@ -869,48 +904,74 @@ class FillFormulaTool(BaseTool):
             try:
                 end_row = int(end_row_raw)
             except (TypeError, ValueError):
-                return ToolResponse(text="Error: end_row must be an integer."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_row",
-                }
+                return (
+                    ToolResponse(text="Error: end_row must be an integer."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_row",
+                    },
+                )
             if not 1 <= end_row <= _EXCEL_MAX_ROWS:
-                return ToolResponse(text=f"Error: end_row must be between 1 and {_EXCEL_MAX_ROWS}."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_row",
-                }
+                return (
+                    ToolResponse(text=f"Error: end_row must be between 1 and {_EXCEL_MAX_ROWS}."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_row",
+                    },
+                )
             if end_row < start_row:
-                return ToolResponse(text=f"Error: end_row ({end_row}) must be >= start_cell row ({start_row})."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_row",
-                }
+                return (
+                    ToolResponse(text=f"Error: end_row ({end_row}) must be >= start_cell row ({start_row})."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_row",
+                    },
+                )
 
         if end_col_raw is None:
             end_col = start_col_letter
             end_col_idx = _col_letter_to_index(end_col)
         else:
             if not isinstance(end_col_raw, str) or not end_col_raw.strip():
-                return ToolResponse(text="Error: end_col must be a non-empty column letter (e.g. H)."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_col",
-                }
+                return (
+                    ToolResponse(text="Error: end_col must be a non-empty column letter (e.g. H)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_col",
+                    },
+                )
             end_col = end_col_raw.strip().upper().replace("$", "")
             if not re.fullmatch(r"[A-Z]{1,3}", end_col):
-                return ToolResponse(text="Error: end_col must be a column letter (e.g. H or AB)."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_col",
-                }
+                return (
+                    ToolResponse(text="Error: end_col must be a column letter (e.g. H or AB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_col",
+                    },
+                )
             end_col_idx = _col_letter_to_index(end_col)
             if not 1 <= end_col_idx <= _EXCEL_MAX_COLS:
-                return ToolResponse(text=f"Error: end_col out of bounds: {end_col}."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_end_col",
-                }
+                return (
+                    ToolResponse(text=f"Error: end_col out of bounds: {end_col}."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_end_col",
+                    },
+                )
 
         start_col_idx = _col_letter_to_index(start_col_letter)
         if end_col_idx < start_col_idx:
-            return ToolResponse(
-                text=f"Error: end_col ({end_col}) must be >= start_cell col ({start_col_letter})."
-            ), 0.0, {"status": "error", "error": "invalid_end_col"}
+            return (
+                ToolResponse(text=f"Error: end_col ({end_col}) must be >= start_cell col ({start_col_letter})."),
+                0.0,
+                {"status": "error", "error": "invalid_end_col"},
+            )
 
         total_rows = end_row - start_row + 1
         total_cols = end_col_idx - start_col_idx + 1
@@ -925,37 +986,55 @@ class FillFormulaTool(BaseTool):
             if max_fill_cells <= 0:
                 max_fill_cells = None
         if max_fill_cells is not None and total_cells > max_fill_cells:
-            return ToolResponse(
-                text=f"Error: requested range is too large (cells={total_cells} > {max_fill_cells})."
-            ), 0.0, {"status": "error", "error": "range_too_large"}
+            return (
+                ToolResponse(text=f"Error: requested range is too large (cells={total_cells} > {max_fill_cells})."),
+                0.0,
+                {"status": "error", "error": "range_too_large"},
+            )
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
         file_path = _resolve_workspace_file(workspace_id=workspace_id, relpath=relpath)
         if file_path is None:
-            return ToolResponse(text=f"Error: file not found: {relpath}"), 0.0, {
-                "status": "error",
-                "error": "file_not_found",
-            }
+            return (
+                ToolResponse(text=f"Error: file not found: {relpath}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "file_not_found",
+                },
+            )
         if self.max_file_size_bytes is not None:
             try:
                 file_size = file_path.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to stat file: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "stat_failed",
+                    },
+                )
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return (
+                    ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "file_too_large",
+                    },
+                )
 
         if total_rows <= 1 and total_cols <= 1:
             coords = [(start_row, start_col_idx)]
@@ -1002,10 +1081,14 @@ class FillFormulaTool(BaseTool):
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
-                return ToolResponse(text=f"Error: failed to fill formulas: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "fill_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to fill formulas: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "fill_failed",
+                    },
+                )
 
             zip_error = await asyncio.to_thread(
                 _scan_zip_metadata,
@@ -1102,10 +1185,14 @@ class FillFormulaTool(BaseTool):
                     pass
 
         if resolved_sheet_name is None:
-            return ToolResponse(text="Error: failed to resolve sheet name."), 0.0, {
-                "status": "error",
-                "error": "fill_failed",
-            }
+            return (
+                ToolResponse(text="Error: failed to resolve sheet name."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "fill_failed",
+                },
+            )
 
         start_addr = f"{start_col_letter}{start_row}"
         range_end = f"{end_col}{end_row}"

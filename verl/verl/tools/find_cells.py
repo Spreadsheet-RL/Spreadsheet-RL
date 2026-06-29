@@ -11,19 +11,22 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
+from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
+from .response_format import records_to_csv
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
 
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
 _SAFE_SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
+DEFAULT_MAX_RESPONSE_CHARS = 4096
+MAX_RESPONSE_CHARS = 8192
 
 
 def _get_max_scan_cells() -> int:
-    value = os.environ.get("SPREADSHEET_RL_FIND_MAX_SCAN_CELLS", "200000").strip()
+    value = os.environ.get("SHEET_ARENA_FIND_MAX_SCAN_CELLS", "200000").strip()
     try:
         n = int(value)
         return min(max(1, n), 10_000_000)
@@ -35,19 +38,19 @@ def _get_max_response_chars(config: Optional[dict[str, Any]] = None) -> int:
     config_value = None
     if isinstance(config, dict):
         config_value = config.get("max_response_chars")
-    for raw in (config_value, os.environ.get("SPREADSHEET_RL_TOOL_MAX_RESPONSE_CHARS", "").strip()):
+    for raw in (config_value, os.environ.get("SHEET_ARENA_TOOL_MAX_RESPONSE_CHARS", "").strip()):
         if raw is None:
             continue
         try:
             n = int(raw)
-            return min(max(128, n), 1000)
+            return min(max(128, n), MAX_RESPONSE_CHARS)
         except (TypeError, ValueError):
             continue
-    return 900
+    return DEFAULT_MAX_RESPONSE_CHARS
 
 
 def _get_max_string_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_TOOL_MAX_STRING_CHARS", "200").strip()
+    raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
         n = int(raw)
         return min(max(16, n), 100_000)
@@ -57,6 +60,23 @@ def _get_max_string_chars() -> int:
 
 def _json_dumps_compact(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _error_payload(error: str, message: str) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "error": error,
+        "message": message,
+        "truncated": False,
+    }
+
+
+def _error_tool_response(error: str, message: str) -> tuple[ToolResponse, float, dict]:
+    payload = _error_payload(error, message)
+    return ToolResponse(text=_json_dumps_compact(payload)), 0.0, {
+        "status": "error",
+        "error": error,
+    }
 
 
 def _truncate_str(value: str, max_chars: int) -> str:
@@ -98,7 +118,7 @@ def _sanitize_relpath(value: Any) -> Optional[Path]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
+    name = value.strip(' \t\n\r\f\v"')
     if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
         name = name[1:-1].replace("''", "'")
         return name.strip()
@@ -120,7 +140,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_spreadsheet_rl_data_root()
+    workspace_base = get_sheet_arena_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -208,6 +228,162 @@ def _to_jsonable_excel_value(value: Any) -> Any:
     return str(value)
 
 
+def _match_columns(*, include_values: bool, search_in: str) -> list[str]:
+    columns = ["address"]
+    if include_values and search_in in {"values", "both"}:
+        columns.append("value")
+    if include_values and search_in in {"formulas", "both"}:
+        columns.append("formula")
+    return columns
+
+
+def _set_matches_csv(
+    payload: dict[str, Any],
+    matches: list[dict[str, Any]],
+    *,
+    include_values: bool,
+    search_in: str,
+) -> None:
+    payload["include_values"] = include_values
+    payload["matches_csv"] = records_to_csv(
+        matches,
+        _match_columns(include_values=include_values, search_in=search_in),
+    )
+    payload["returned"] = len(matches)
+    payload["returned_matches"] = len(matches)
+    payload.pop("matches", None)
+
+
+def _mark_values_omitted(payload: dict[str, Any]) -> None:
+    payload["values_omitted"] = True
+    _add_truncation_reason(payload, "values_omitted")
+
+
+def _fits_response_budget(payload: dict[str, Any], max_response_chars: int) -> bool:
+    return len(_json_dumps_compact(payload)) <= max_response_chars
+
+
+def _fit_success_payload_to_max_chars(payload: dict[str, Any], max_response_chars: int) -> dict[str, Any]:
+    if _fits_response_budget(payload, max_response_chars):
+        return payload
+
+    payload["truncated"] = True
+    payload["response_truncated"] = True
+    _add_truncation_reason(payload, "response_budget")
+
+    for keys in (
+        ("query", "requested_range", "ranges", "sheet_summaries", "searched_sheets", "range", "max_results"),
+        ("file",),
+        ("sheet_scope",),
+        ("sheet",),
+        ("result_truncated", "scan_truncated"),
+        ("include_values",),
+        ("truncation_reasons",),
+    ):
+        for key in keys:
+            payload.pop(key, None)
+        if _fits_response_budget(payload, max_response_chars):
+            return payload
+
+    total_matches = payload.get("total_matches", payload.get("returned_matches", payload.get("returned", 0)))
+    compact: dict[str, Any] = {
+        "status": payload.get("status", "success"),
+        "total_matches": total_matches,
+        "truncated": True,
+        "response_truncated": True,
+    }
+    for key in ("matches_csv", "returned", "returned_matches", "values_omitted"):
+        if key in payload:
+            compact[key] = payload[key]
+    if _fits_response_budget(compact, max_response_chars):
+        payload.clear()
+        payload.update(compact)
+        return payload
+
+    for key in ("matches_csv", "returned", "returned_matches"):
+        compact.pop(key, None)
+        if _fits_response_budget(compact, max_response_chars):
+            payload.clear()
+            payload.update(compact)
+            return payload
+
+    compact.pop("values_omitted", None)
+    if _fits_response_budget(compact, max_response_chars):
+        payload.clear()
+        payload.update(compact)
+        return payload
+
+    payload.clear()
+    payload.update({"status": "success", "truncated": True})
+    return payload
+
+
+def _add_truncation_reason(payload: dict[str, Any], reason: str) -> None:
+    payload["truncated"] = True
+    reasons = payload.setdefault("truncation_reasons", [])
+    if isinstance(reasons, list) and reason not in reasons:
+        reasons.append(reason)
+
+
+def _fit_matches_csv_payload(
+    payload: dict[str, Any],
+    matches: list[dict[str, Any]],
+    *,
+    include_values: bool,
+    search_in: str,
+    max_response_chars: int,
+) -> dict[str, Any]:
+    matches_out = list(matches)
+    _set_matches_csv(payload, matches_out, include_values=include_values, search_in=search_in)
+    text = _json_dumps_compact(payload)
+    if len(text) <= max_response_chars:
+        return payload
+
+    while len(text) > max_response_chars and len(matches_out) > 1:
+        matches_out = matches_out[: max(1, len(matches_out) // 2)]
+        _set_matches_csv(payload, matches_out, include_values=include_values, search_in=search_in)
+        payload["response_truncated"] = True
+        _add_truncation_reason(payload, "response_budget")
+        text = _json_dumps_compact(payload)
+
+    if len(text) > max_response_chars:
+        for key in ("query", "ranges", "sheet_summaries", "searched_sheets"):
+            payload.pop(key, None)
+        payload["response_truncated"] = True
+        _add_truncation_reason(payload, "response_budget")
+        text = _json_dumps_compact(payload)
+
+    if len(text) > max_response_chars and include_values:
+        matches_out = [{"address": match.get("address")} for match in matches_out if match.get("address")]
+        _set_matches_csv(payload, matches_out, include_values=False, search_in=search_in)
+        payload["response_truncated"] = True
+        _add_truncation_reason(payload, "response_budget")
+        _mark_values_omitted(payload)
+        text = _json_dumps_compact(payload)
+
+    if len(text) <= max_response_chars:
+        return payload
+
+    first_match = matches_out[:1]
+    minimal = {
+        "status": "success",
+        "file": payload.get("file"),
+        "sheet_scope": payload.get("sheet_scope"),
+        "total_matches": payload.get("total_matches", 0),
+        "max_results": payload.get("max_results"),
+        "truncated": True,
+        "result_truncated": bool(payload.get("result_truncated")),
+        "scan_truncated": bool(payload.get("scan_truncated")),
+        "response_truncated": True,
+        "truncation_reasons": ["response_budget"],
+    }
+    if include_values:
+        minimal["values_omitted"] = True
+        minimal["truncation_reasons"].append("values_omitted")
+    _set_matches_csv(minimal, first_match, include_values=False, search_in=search_in)
+    return _fit_success_payload_to_max_chars(minimal, max_response_chars)
+
+
 def _resolve_target_worksheet(wb, requested_name: str):
     worksheets = getattr(wb, "worksheets", None) or []
     for ws in worksheets:
@@ -252,6 +428,7 @@ def _scan_zip_metadata(
             for info in infos:
                 uncompressed = int(getattr(info, "file_size", 0) or 0)
                 compressed = int(getattr(info, "compress_size", 0) or 0)
+                filename = getattr(info, "filename", "?")
 
                 total_uncompressed += uncompressed
                 total_compressed += compressed
@@ -259,18 +436,17 @@ def _scan_zip_metadata(
                 if uncompressed > max_member_uncompressed_bytes:
                     return (
                         "zip member too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
+                        f"(name={filename!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
                     )
                 if compressed > 0 and max_ratio > 0 and (uncompressed / compressed) > max_ratio:
                     return (
                         "zip member compression ratio too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
+                        f"(name={filename!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
                     )
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -320,7 +496,7 @@ def _normalize_return_mode(value: Any) -> str:
 
 
 def _get_regex_haystack_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_FIND_REGEX_HAYSTACK_CHARS", "2000").strip()
+    raw = os.environ.get("SHEET_ARENA_FIND_REGEX_HAYSTACK_CHARS", "2000").strip()
     try:
         n = int(raw)
         return min(max(64, n), 100_000)
@@ -329,7 +505,7 @@ def _get_regex_haystack_chars() -> int:
 
 
 def _get_max_regex_pattern_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_FIND_REGEX_MAX_PATTERN_CHARS", "200").strip()
+    raw = os.environ.get("SHEET_ARENA_FIND_REGEX_MAX_PATTERN_CHARS", "200").strip()
     try:
         n = int(raw)
         return min(max(16, n), 2000)
@@ -383,6 +559,7 @@ def _find_cells_sync(
     return_mode: str,
     max_results: int,
     max_response_chars: int,
+    include_values: bool,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     try:
         from openpyxl import load_workbook
@@ -456,7 +633,9 @@ def _find_cells_sync(
         used_max_col = int(used_max_col)
         used_max_row = int(used_max_row)
 
-        req_boundaries = range_boundaries(effective_range if ":" in effective_range else f"{effective_range}:{effective_range}")
+        req_boundaries = range_boundaries(
+            effective_range if ":" in effective_range else f"{effective_range}:{effective_range}"
+        )
         req_min_col, req_min_row, req_max_col, req_max_row = req_boundaries
         if req_min_col is None:
             req_min_col = 1
@@ -518,13 +697,16 @@ def _find_cells_sync(
             ws_formula = _resolve_target_worksheet(wb_formula, actual_sheet)
 
         results: list[dict[str, Any]] = []
+        total_matches = 0
         truncated = False
         scan_truncated = False
         scanned = 0
 
         sheet_ref = _quote_sheet_name_for_a1(actual_sheet)
         range_out = scanned_range or effective_range
-        requested_range_out = effective_range if scanned_range is not None and scanned_range != effective_range else None
+        requested_range_out = (
+            effective_range if scanned_range is not None and scanned_range != effective_range else None
+        )
 
         if candidate_cell_count <= 0:
             payload = {
@@ -536,10 +718,14 @@ def _find_cells_sync(
                 "match": match_mode,
                 "search_in": search_in,
                 "case_sensitive": case_sensitive,
+                "include_values": include_values,
+                "total_matches": 0,
+                "max_results": max_results,
                 "truncated": False,
+                "result_truncated": False,
                 "scan_truncated": False,
-                "matches": [],
             }
+            _set_matches_csv(payload, [], include_values=include_values, search_in=search_in)
             if requested_range_out is not None:
                 payload["requested_range"] = f"{sheet_ref}!{requested_range_out}"
             metrics = {
@@ -550,7 +736,10 @@ def _find_cells_sync(
                 "requested_cells": requested_cell_count,
                 "candidate_cells": candidate_cell_count,
                 "returned_matches": 0,
+                "total_matches": 0,
+                "include_values": include_values,
                 "truncated": False,
+                "result_truncated": False,
                 "scan_truncated": False,
             }
             return payload, metrics
@@ -617,12 +806,17 @@ def _find_cells_sync(
                 if not any(matches_text(text) for text in haystacks):
                     continue
 
+                total_matches += 1
+                if return_mode == "all" and len(results) >= max_results:
+                    truncated = True
+                    continue
+
                 match_entry: dict[str, Any] = {
                     "address": _format_a1_address(sheet_name=actual_sheet, row=row_num, col=col_num),
                 }
-                if search_in in {"values", "both"}:
+                if include_values and search_in in {"values", "both"}:
                     match_entry["value"] = _to_jsonable_excel_value(value_obj)
-                if search_in in {"formulas", "both"}:
+                if include_values and search_in in {"formulas", "both"}:
                     match_entry["formula"] = (
                         _truncate_str(formula_text, _get_max_string_chars()) if isinstance(formula_text, str) else None
                     )
@@ -639,10 +833,19 @@ def _find_cells_sync(
                         "match": match_mode,
                         "search_in": search_in,
                         "case_sensitive": case_sensitive,
+                        "include_values": include_values,
+                        "total_matches": len(results),
+                        "max_results": max_results,
                         "truncated": False,
+                        "result_truncated": False,
                         "scan_truncated": False,
-                        "matches": results,
                     }
+                    _set_matches_csv(
+                        payload,
+                        results,
+                        include_values=include_values,
+                        search_in=search_in,
+                    )
                     if requested_range_out is not None:
                         payload["requested_range"] = f"{sheet_ref}!{requested_range_out}"
                     metrics = {
@@ -653,24 +856,36 @@ def _find_cells_sync(
                         "requested_cells": requested_cell_count,
                         "candidate_cells": candidate_cell_count,
                         "returned_matches": len(results),
+                        "total_matches": len(results),
+                        "include_values": include_values,
                         "truncated": False,
+                        "result_truncated": False,
                         "scan_truncated": False,
                     }
                     text = _json_dumps_compact(payload)
                     if len(text) <= max_response_chars:
                         return payload, metrics
 
-                    matches_out = payload.get("matches")
-                    if isinstance(matches_out, list) and matches_out:
+                    matches_out = list(results)
+                    if matches_out:
                         for match in matches_out:
-                            if not isinstance(match, dict):
-                                continue
                             match.pop("value", None)
                             match.pop("formula", None)
-                        payload["matches"] = matches_out[:1]
+                        matches_out = matches_out[:1]
+                        _set_matches_csv(
+                            payload,
+                            matches_out,
+                            include_values=False,
+                            search_in=search_in,
+                        )
                         payload["truncated"] = True
+                        payload["response_truncated"] = True
+                        _add_truncation_reason(payload, "response_budget")
+                        if include_values:
+                            _mark_values_omitted(payload)
                         metrics["truncated"] = True
-                        metrics["returned_matches"] = len(payload["matches"])
+                        metrics["include_values"] = False
+                        metrics["returned_matches"] = len(matches_out)
                         text = _json_dumps_compact(payload)
 
                     if len(text) > max_response_chars:
@@ -679,29 +894,38 @@ def _find_cells_sync(
                         text = _json_dumps_compact(payload)
 
                     if len(text) > max_response_chars:
-                        addr = None
-                        matches_out = payload.get("matches")
-                        if isinstance(matches_out, list) and matches_out:
-                            first = matches_out[0]
-                            if isinstance(first, dict):
-                                addr = first.get("address")
+                        addr = matches_out[0].get("address") if matches_out else None
                         payload = {
                             "status": "success",
                             "file": str(file_path),
                             "sheet": actual_sheet,
                             "range": f"{sheet_ref}!{range_out}",
+                            "total_matches": len(results),
+                            "max_results": max_results,
                             "truncated": True,
+                            "result_truncated": False,
+                            "response_truncated": True,
                             "scan_truncated": False,
-                            "matches": [{"address": addr}] if isinstance(addr, str) and addr else [],
                         }
+                        _set_matches_csv(
+                            payload,
+                            [{"address": addr}] if isinstance(addr, str) and addr else [],
+                            include_values=False,
+                            search_in=search_in,
+                        )
+                        _add_truncation_reason(payload, "response_budget")
+                        if include_values:
+                            _mark_values_omitted(payload)
                         metrics["truncated"] = True
-                        metrics["returned_matches"] = len(payload["matches"])
+                        metrics["include_values"] = False
+                        metrics["returned_matches"] = 1 if isinstance(addr, str) and addr else 0
+                        payload = _fit_success_payload_to_max_chars(payload, max_response_chars)
+                        metrics["returned_matches"] = payload.get(
+                            "returned_matches",
+                            payload.get("returned", metrics["returned_matches"]),
+                        )
                     return payload, metrics
-
-                if len(results) >= max_results:
-                    truncated = True
-                    break
-            if truncated or scan_truncated:
+            if scan_truncated:
                 break
 
         payload = {
@@ -713,10 +937,16 @@ def _find_cells_sync(
             "match": match_mode,
             "search_in": search_in,
             "case_sensitive": case_sensitive,
+            "include_values": include_values,
+            "total_matches": total_matches,
+            "max_results": max_results,
             "truncated": truncated,
+            "result_truncated": truncated,
             "scan_truncated": scan_truncated,
-            "matches": results,
         }
+        _set_matches_csv(payload, results, include_values=include_values, search_in=search_in)
+        if truncated:
+            _add_truncation_reason(payload, "max_results")
         if requested_range_out is not None:
             payload["requested_range"] = f"{sheet_ref}!{requested_range_out}"
         metrics = {
@@ -727,33 +957,42 @@ def _find_cells_sync(
             "requested_cells": requested_cell_count,
             "candidate_cells": candidate_cell_count,
             "returned_matches": len(results),
+            "total_matches": total_matches,
+            "include_values": include_values,
             "truncated": truncated,
+            "result_truncated": truncated,
             "scan_truncated": scan_truncated,
         }
         text = _json_dumps_compact(payload)
         if len(text) <= max_response_chars:
             return payload, metrics
 
-        matches = payload.get("matches")
-        if isinstance(matches, list) and matches:
+        matches = list(results)
+        if matches:
             while len(text) > max_response_chars and len(matches) > 1:
                 matches = matches[: max(1, len(matches) // 2)]
-                payload["matches"] = matches
+                _set_matches_csv(payload, matches, include_values=include_values, search_in=search_in)
                 payload["truncated"] = True
+                payload["response_truncated"] = True
+                _add_truncation_reason(payload, "response_budget")
                 metrics["truncated"] = True
                 metrics["returned_matches"] = len(matches)
                 text = _json_dumps_compact(payload)
 
             if len(text) > max_response_chars:
                 for match in matches:
-                    if not isinstance(match, dict):
-                        continue
                     match.pop("value", None)
                     match.pop("formula", None)
-                payload["matches"] = matches[:1]
+                matches = matches[:1]
+                _set_matches_csv(payload, matches, include_values=False, search_in=search_in)
                 payload["truncated"] = True
+                payload["response_truncated"] = True
+                _add_truncation_reason(payload, "response_budget")
+                if include_values:
+                    _mark_values_omitted(payload)
                 metrics["truncated"] = True
-                metrics["returned_matches"] = len(payload["matches"])
+                metrics["include_values"] = False
+                metrics["returned_matches"] = len(matches)
                 text = _json_dumps_compact(payload)
 
         if len(text) > max_response_chars:
@@ -763,22 +1002,398 @@ def _find_cells_sync(
 
         if len(text) > max_response_chars:
             addr = None
-            matches_out = payload.get("matches")
-            if isinstance(matches_out, list) and matches_out:
-                first = matches_out[0]
-                if isinstance(first, dict):
-                    addr = first.get("address")
+            if matches:
+                addr = matches[0].get("address")
             payload = {
                 "status": "success",
                 "file": str(file_path),
                 "sheet": actual_sheet,
                 "range": f"{sheet_ref}!{range_out}",
+                "total_matches": total_matches,
+                "max_results": max_results,
                 "truncated": True,
+                "result_truncated": truncated,
+                "response_truncated": True,
                 "scan_truncated": scan_truncated,
-                "matches": [{"address": addr}] if isinstance(addr, str) and addr else [],
             }
+            _set_matches_csv(
+                payload,
+                [{"address": addr}] if isinstance(addr, str) and addr else [],
+                include_values=False,
+                search_in=search_in,
+            )
+            _add_truncation_reason(payload, "response_budget")
+            if include_values:
+                _mark_values_omitted(payload)
             metrics["truncated"] = True
-            metrics["returned_matches"] = len(payload["matches"])
+            metrics["include_values"] = False
+            metrics["returned_matches"] = 1 if isinstance(addr, str) and addr else 0
+            payload = _fit_success_payload_to_max_chars(payload, max_response_chars)
+            metrics["returned_matches"] = payload.get(
+                "returned_matches",
+                payload.get("returned", metrics["returned_matches"]),
+            )
+        return payload, metrics
+    finally:
+        for wb in (wb_formula, wb_values):
+            if wb is None:
+                continue
+            try:
+                wb.close()
+            except Exception:
+                pass
+
+
+def _find_cells_all_sheets_sync(
+    *,
+    file_path: Path,
+    query: str,
+    search_range: Optional[str],
+    match_mode: str,
+    search_in: str,
+    case_sensitive: bool,
+    return_mode: str,
+    max_results: int,
+    max_response_chars: int,
+    include_values: bool,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    try:
+        from openpyxl import load_workbook
+        from openpyxl.utils.cell import range_boundaries
+    except ImportError:
+        raise RuntimeError("openpyxl is required; install openpyxl>=3.1.5") from None
+
+    if max_results < 1:
+        max_results = 1
+
+    wb_values = None
+    wb_formula = None
+    try:
+        if search_in in {"values", "both"}:
+            wb_values = load_workbook(filename=str(file_path), data_only=True, read_only=True, keep_links=False)
+        if search_in in {"formulas", "both"}:
+            wb_formula = load_workbook(filename=str(file_path), data_only=False, read_only=True, keep_links=False)
+
+        wb_ref = wb_values or wb_formula
+        if wb_ref is None:
+            raise RuntimeError("invalid search_in mode")
+
+        requested_range_sheet = None
+        range_without_sheet = search_range
+        if isinstance(search_range, str) and "!" in search_range:
+            sheet_part, _, range_part = search_range.rpartition("!")
+            requested_range_sheet = _normalize_sheet_name(sheet_part)
+            if not requested_range_sheet:
+                raise RuntimeError(f"empty sheet name in range: {search_range!r}")
+            if not range_part.strip():
+                raise RuntimeError(f"empty range in range: {search_range!r}")
+            range_without_sheet = range_part.strip()
+
+        if requested_range_sheet:
+            ws_ref = _resolve_target_worksheet(wb_ref, requested_range_sheet)
+            sheet_names = [getattr(ws_ref, "title", requested_range_sheet) or requested_range_sheet]
+            sheet_scope = sheet_names[0]
+        else:
+            worksheets = getattr(wb_ref, "worksheets", None) or []
+            sheet_names = [getattr(ws, "title", "") for ws in worksheets if getattr(ws, "title", "")]
+            sheet_scope = "all"
+        if not sheet_names:
+            raise RuntimeError("workbook has no worksheets")
+
+        max_scan_cells = _get_max_scan_cells()
+        regex = None
+        if match_mode == "regex":
+            flags = 0 if case_sensitive else re.IGNORECASE
+            regex = re.compile(query, flags=flags)
+            max_scan_cells = min(max_scan_cells, 10_000)
+        q = query if case_sensitive else query.casefold()
+        regex_haystack_chars = _get_regex_haystack_chars()
+        if match_mode == "regex":
+            regex_haystack_chars = min(regex_haystack_chars, 200)
+
+        def matches_text(text: str) -> bool:
+            if match_mode == "regex":
+                if regex is None:
+                    return False
+                return regex.search(text[:regex_haystack_chars]) is not None
+            hay = text if case_sensitive else text.casefold()
+            if match_mode == "contains":
+                return q in hay
+            if match_mode == "equals":
+                return hay == q
+            if match_mode == "prefix":
+                return hay.startswith(q)
+            return False
+
+        results: list[dict[str, Any]] = []
+        ranges: list[str] = []
+        searched_sheets: list[str] = []
+        sheet_summaries: list[dict[str, Any]] = []
+        scanned = 0
+        requested_cells = 0
+        candidate_cells = 0
+        total_matches = 0
+        result_truncated = False
+        scan_truncated = False
+        stopped_after_first = False
+
+        for actual_sheet in sheet_names:
+            if scanned >= max_scan_cells:
+                scan_truncated = True
+                break
+
+            ws_ref = _resolve_target_worksheet(wb_ref, actual_sheet)
+            actual_sheet = getattr(ws_ref, "title", actual_sheet) or actual_sheet
+            searched_sheets.append(actual_sheet)
+
+            used_range = None
+            try:
+                used_range = ws_ref.calculate_dimension()
+            except Exception:
+                used_range = None
+            if not isinstance(used_range, str) or not used_range.strip():
+                try:
+                    dim = getattr(ws_ref, "dimensions", None)
+                except Exception:
+                    dim = None
+                used_range = dim.strip() if isinstance(dim, str) else ""
+            if not used_range:
+                try:
+                    max_row = int(getattr(ws_ref, "max_row", 1) or 1)
+                    max_col = int(getattr(ws_ref, "max_column", 1) or 1)
+                    max_row = min(max(1, max_row), _EXCEL_MAX_ROWS)
+                    max_col = min(max(1, max_col), _EXCEL_MAX_COLS)
+                    used_range = _bounds_to_a1(min_col=1, min_row=1, max_col=max_col, max_row=max_row)
+                except Exception:
+                    used_range = "A1:A1"
+
+            effective_range = (
+                range_without_sheet.strip()
+                if isinstance(range_without_sheet, str) and range_without_sheet.strip()
+                else used_range
+            )
+            effective_range = _normalize_cell_range(effective_range)
+            used_range = _normalize_cell_range(used_range)
+
+            used_boundaries = range_boundaries(used_range if ":" in used_range else f"{used_range}:{used_range}")
+            used_min_col, used_min_row, used_max_col, used_max_row = used_boundaries
+            if used_min_col is None:
+                used_min_col = 1
+            if used_max_col is None:
+                used_max_col = _EXCEL_MAX_COLS
+            if used_min_row is None:
+                used_min_row = 1
+            if used_max_row is None:
+                used_max_row = _EXCEL_MAX_ROWS
+            used_min_col = int(used_min_col)
+            used_min_row = int(used_min_row)
+            used_max_col = int(used_max_col)
+            used_max_row = int(used_max_row)
+
+            req_boundaries = range_boundaries(
+                effective_range if ":" in effective_range else f"{effective_range}:{effective_range}"
+            )
+            req_min_col, req_min_row, req_max_col, req_max_row = req_boundaries
+            if req_min_col is None:
+                req_min_col = 1
+            if req_max_col is None:
+                req_max_col = _EXCEL_MAX_COLS
+            if req_min_row is None:
+                req_min_row = 1
+            if req_max_row is None:
+                req_max_row = _EXCEL_MAX_ROWS
+            req_min_col = int(req_min_col)
+            req_min_row = int(req_min_row)
+            req_max_col = int(req_max_col)
+            req_max_row = int(req_max_row)
+            requested_cell_count = (req_max_col - req_min_col + 1) * (req_max_row - req_min_row + 1)
+            requested_cells += requested_cell_count
+
+            min_col = max(req_min_col, used_min_col)
+            min_row = max(req_min_row, used_min_row)
+            max_col = min(req_max_col, used_max_col)
+            max_row = min(req_max_row, used_max_row)
+            if max_col >= min_col and max_row >= min_row:
+                scanned_range = _bounds_to_a1(min_col=min_col, min_row=min_row, max_col=max_col, max_row=max_row)
+                candidate_cell_count = (max_col - min_col + 1) * (max_row - min_row + 1)
+            else:
+                scanned_range = None
+                candidate_cell_count = 0
+            candidate_cells += candidate_cell_count
+
+            sheet_ref = _quote_sheet_name_for_a1(actual_sheet)
+            range_out = scanned_range or effective_range
+            range_label = f"{sheet_ref}!{range_out}"
+            ranges.append(range_label)
+            sheet_scanned = 0
+            sheet_matches = 0
+
+            if candidate_cell_count <= 0:
+                sheet_summaries.append({
+                    "sheet": actual_sheet,
+                    "range": range_label,
+                    "scanned_cells": 0,
+                    "matches": 0,
+                })
+                continue
+
+            ws_values = _resolve_target_worksheet(wb_values, actual_sheet) if wb_values is not None else None
+            ws_formula = _resolve_target_worksheet(wb_formula, actual_sheet) if wb_formula is not None else None
+
+            def iter_rows_values(
+                ws_values=ws_values,
+                min_row=min_row,
+                max_row=max_row,
+                min_col=min_col,
+                max_col=max_col,
+            ):
+                if ws_values is None:
+                    return []
+                return ws_values.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+
+            def iter_rows_formula(
+                ws_formula=ws_formula,
+                min_row=min_row,
+                max_row=max_row,
+                min_col=min_col,
+                max_col=max_col,
+            ):
+                if ws_formula is None:
+                    return []
+                return ws_formula.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col)
+
+            if search_in == "both":
+                row_iter = itertools.zip_longest(iter_rows_values(), iter_rows_formula(), fillvalue=())
+            elif search_in == "values":
+                row_iter = ((row, None) for row in iter_rows_values())
+            else:
+                row_iter = ((None, row) for row in iter_rows_formula())
+
+            for r_idx, (row_vals, row_forms) in enumerate(row_iter, start=0):
+                row_num = min_row + r_idx
+                if row_vals is None:
+                    row_vals = []
+                if row_forms is None:
+                    row_forms = []
+                max_len = max(len(row_vals), len(row_forms))
+                for c_idx in range(max_len):
+                    col_num = min_col + c_idx
+                    if scanned >= max_scan_cells:
+                        scan_truncated = True
+                        break
+                    scanned += 1
+                    sheet_scanned += 1
+
+                    value_obj = None
+                    if search_in in {"values", "both"} and c_idx < len(row_vals):
+                        try:
+                            value_obj = getattr(row_vals[c_idx], "value", None)
+                        except Exception:
+                            value_obj = None
+
+                    formula_text = None
+                    if search_in in {"formulas", "both"} and c_idx < len(row_forms):
+                        try:
+                            cell_f = row_forms[c_idx]
+                            if getattr(cell_f, "data_type", None) == "f":
+                                raw = getattr(cell_f, "value", None)
+                                if isinstance(raw, str) and raw:
+                                    formula_text = raw if raw.startswith("=") else f"={raw}"
+                        except Exception:
+                            formula_text = None
+
+                    haystacks: list[str] = []
+                    if search_in in {"values", "both"} and value_obj is not None:
+                        haystacks.append(str(value_obj))
+                    if search_in in {"formulas", "both"} and formula_text is not None:
+                        haystacks.append(formula_text)
+                    if not haystacks or not any(matches_text(text) for text in haystacks):
+                        continue
+
+                    sheet_matches += 1
+                    total_matches += 1
+                    if return_mode == "all" and len(results) >= max_results:
+                        result_truncated = True
+                        continue
+
+                    match_entry: dict[str, Any] = {
+                        "address": _format_a1_address(sheet_name=actual_sheet, row=row_num, col=col_num),
+                    }
+                    if include_values and search_in in {"values", "both"}:
+                        match_entry["value"] = _to_jsonable_excel_value(value_obj)
+                    if include_values and search_in in {"formulas", "both"}:
+                        match_entry["formula"] = (
+                            _truncate_str(formula_text, _get_max_string_chars())
+                            if isinstance(formula_text, str)
+                            else None
+                        )
+                    results.append(match_entry)
+
+                    if return_mode == "first":
+                        stopped_after_first = True
+                        break
+                if scan_truncated or stopped_after_first:
+                    break
+
+            sheet_summaries.append({
+                "sheet": actual_sheet,
+                "range": range_label,
+                "scanned_cells": sheet_scanned,
+                "matches": sheet_matches,
+            })
+            if scan_truncated or stopped_after_first:
+                break
+
+        payload = {
+            "status": "success",
+            "file": str(file_path),
+            "sheet_scope": sheet_scope,
+            "searched_sheets": searched_sheets,
+            "ranges": ranges,
+            "query": _to_jsonable_excel_value(query),
+            "match": match_mode,
+            "search_in": search_in,
+            "case_sensitive": case_sensitive,
+            "include_values": include_values,
+            "total_matches": total_matches,
+            "max_results": max_results,
+            "truncated": result_truncated or scan_truncated,
+            "result_truncated": result_truncated,
+            "scan_truncated": scan_truncated,
+            "sheet_summaries": sheet_summaries,
+        }
+        if sheet_scope != "all" and searched_sheets:
+            payload["sheet"] = searched_sheets[0]
+            payload["range"] = ranges[0] if ranges else None
+        if result_truncated:
+            _add_truncation_reason(payload, "max_results")
+        if scan_truncated:
+            _add_truncation_reason(payload, "scan_limit")
+        payload = _fit_matches_csv_payload(
+            payload,
+            results,
+            include_values=include_values,
+            search_in=search_in,
+            max_response_chars=max_response_chars,
+        )
+
+        metrics = {
+            "status": "success",
+            "file": str(file_path),
+            "sheet_scope": sheet_scope,
+            "searched_sheets": len(searched_sheets),
+            "scanned_cells": scanned,
+            "requested_cells": requested_cells,
+            "candidate_cells": candidate_cells,
+            "total_matches": total_matches,
+            "returned_matches": payload.get("returned_matches", payload.get("returned", len(results))),
+            "include_values": bool(payload.get("include_values")),
+            "truncated": bool(payload.get("truncated")),
+            "result_truncated": bool(payload.get("result_truncated")),
+            "scan_truncated": scan_truncated,
+        }
+        if sheet_scope != "all" and searched_sheets:
+            metrics["sheet"] = searched_sheets[0]
         return payload, metrics
     finally:
         for wb in (wb_formula, wb_values):
@@ -822,32 +1437,23 @@ class FindCellsTool(BaseTool):
         else:
             relpath = _sanitize_relpath(raw_path)
             if relpath is None:
-                return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
+                return _error_tool_response("invalid_path", "invalid path.")
         if relpath.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return _error_tool_response("invalid_path", "only .xlsx workbooks are supported.")
 
         sheet_name_raw = parameters.get("sheet_name")
-        if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-            return ToolResponse(text="Error: sheet_name is required."), 0.0, {
-                "status": "error",
-                "error": "invalid_sheet_name",
-            }
-        sheet_name = _normalize_sheet_name(sheet_name_raw)
-        if not sheet_name:
-            return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
-                "status": "error",
-                "error": "invalid_sheet_name",
-            }
+        if sheet_name_raw is None or (isinstance(sheet_name_raw, str) and not sheet_name_raw.strip()):
+            sheet_name = None
+        elif not isinstance(sheet_name_raw, str):
+            return _error_tool_response("invalid_sheet_name", "sheet_name must be a string when provided.")
+        else:
+            sheet_name = _normalize_sheet_name(sheet_name_raw)
+            if not sheet_name:
+                return _error_tool_response("invalid_sheet_name", "sheet_name is empty after normalization.")
 
         query_raw = parameters.get("query")
         if not isinstance(query_raw, str) or not query_raw.strip():
-            return ToolResponse(text="Error: query must be a non-empty string."), 0.0, {
-                "status": "error",
-                "error": "invalid_query",
-            }
+            return _error_tool_response("invalid_query", "query must be a non-empty string.")
         query = query_raw.strip()
 
         try:
@@ -855,36 +1461,32 @@ class FindCellsTool(BaseTool):
             search_in = _normalize_search_in(parameters.get("search_in"))
             return_mode = _normalize_return_mode(parameters.get("return"))
         except ValueError as exc:
-            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_parameters"}
+            return _error_tool_response("invalid_parameters", str(exc))
 
         if match_mode == "regex":
             max_pat = _get_max_regex_pattern_chars()
             if len(query) > max_pat:
-                return ToolResponse(text=f"Error: regex pattern too long (len={len(query)}, max={max_pat})."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_query",
-                }
+                return _error_tool_response(
+                    "invalid_query",
+                    f"regex pattern too long (len={len(query)}, max={max_pat}).",
+                )
             regex_error = _validate_regex_pattern(query)
             if regex_error:
-                return ToolResponse(text=f"Error: {regex_error}"), 0.0, {
-                    "status": "error",
-                    "error": "invalid_query",
-                }
+                return _error_tool_response("invalid_query", regex_error)
 
         case_sensitive_raw = parameters.get("case_sensitive", False)
         if not isinstance(case_sensitive_raw, bool):
-            return ToolResponse(text="Error: case_sensitive must be a boolean."), 0.0, {
-                "status": "error",
-                "error": "invalid_case_sensitive",
-            }
+            return _error_tool_response("invalid_case_sensitive", "case_sensitive must be a boolean.")
         case_sensitive = bool(case_sensitive_raw)
+
+        include_values_raw = parameters.get("include_values", False)
+        if not isinstance(include_values_raw, bool):
+            return _error_tool_response("invalid_include_values", "include_values must be a boolean.")
+        include_values = bool(include_values_raw)
 
         search_range = parameters.get("range")
         if search_range is not None and (not isinstance(search_range, str) or not search_range.strip()):
-            return ToolResponse(text="Error: range must be a non-empty string if provided."), 0.0, {
-                "status": "error",
-                "error": "invalid_range",
-            }
+            return _error_tool_response("invalid_range", "range must be a non-empty string if provided.")
 
         max_results_raw = parameters.get("max_results", 20)
         try:
@@ -895,31 +1497,22 @@ class FindCellsTool(BaseTool):
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return _error_tool_response("missing_workspace_id", "workspace_id is missing/invalid.")
         file_path = _resolve_workspace_file(workspace_id=workspace_id, relpath=relpath)
         if file_path is None:
-            return ToolResponse(text=f"Error: file not found: {relpath}"), 0.0, {
-                "status": "error",
-                "error": "file_not_found",
-            }
+            return _error_tool_response("file_not_found", f"file not found: {relpath}")
         if self.max_file_size_bytes is not None:
             try:
                 file_size = file_path.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return _error_tool_response("stat_failed", f"failed to stat file: {exc}")
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return _error_tool_response(
+                    "file_too_large",
+                    f"workbook is too large ({actual_mb:.1f}MB > {max_mb}MB).",
+                )
         zip_error = await asyncio.to_thread(
             _scan_zip_metadata,
             file_path,
@@ -929,34 +1522,64 @@ class FindCellsTool(BaseTool):
             max_ratio=200.0,
         )
         if zip_error:
-            return ToolResponse(text=f"Error: workbook rejected by zip safety checks: {zip_error}"), 0.0, {
-                "status": "error",
-                "error": "zip_limits_exceeded",
-            }
+            return _error_tool_response("zip_limits_exceeded", f"workbook rejected by zip safety checks: {zip_error}")
 
         try:
-            payload, metrics = await asyncio.to_thread(
-                _find_cells_sync,
-                file_path=file_path,
-                sheet_name=sheet_name,
-                query=query,
-                search_range=search_range,
-                match_mode=match_mode,
-                search_in=search_in,
-                case_sensitive=case_sensitive,
-                return_mode=return_mode,
-                max_results=max_results,
-                max_response_chars=self.max_response_chars,
-            )
+            if sheet_name is None:
+                payload, metrics = await asyncio.to_thread(
+                    _find_cells_all_sheets_sync,
+                    file_path=file_path,
+                    query=query,
+                    search_range=search_range,
+                    match_mode=match_mode,
+                    search_in=search_in,
+                    case_sensitive=case_sensitive,
+                    return_mode=return_mode,
+                    max_results=max_results,
+                    max_response_chars=self.max_response_chars,
+                    include_values=include_values,
+                )
+            else:
+                payload, metrics = await asyncio.to_thread(
+                    _find_cells_sync,
+                    file_path=file_path,
+                    sheet_name=sheet_name,
+                    query=query,
+                    search_range=search_range,
+                    match_mode=match_mode,
+                    search_in=search_in,
+                    case_sensitive=case_sensitive,
+                    return_mode=return_mode,
+                    max_results=max_results,
+                    max_response_chars=self.max_response_chars,
+                    include_values=include_values,
+                )
         except asyncio.CancelledError:
             raise
         except re.error as exc:
-            return ToolResponse(text=f"Error: invalid regex: {exc}"), 0.0, {"status": "error", "error": "invalid_regex"}
+            return _error_tool_response("invalid_regex", f"invalid regex: {exc}")
         except Exception as exc:
-            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "find_failed"}
+            return _error_tool_response("find_failed", str(exc))
 
         payload["file"] = str(relpath)
+        if sheet_name is not None:
+            sheet_scope = payload.get("sheet", sheet_name)
+            payload.setdefault("sheet_scope", sheet_scope)
+            payload.setdefault("searched_sheets", [sheet_scope])
+            payload.setdefault("total_matches", payload.get("returned_matches", payload.get("returned", 0)))
+            payload.setdefault("max_results", max_results)
+            payload.setdefault("result_truncated", bool(payload.get("truncated")) and not payload.get("scan_truncated"))
+            metrics.setdefault("sheet_scope", sheet_scope)
+            metrics.setdefault("searched_sheets", 1)
+            metrics.setdefault("total_matches", payload.get("total_matches", 0))
+            metrics.setdefault("result_truncated", payload.get("result_truncated", False))
         metrics["file"] = str(relpath)
+        payload = _fit_success_payload_to_max_chars(payload, self.max_response_chars)
+        metrics["returned_matches"] = payload.get(
+            "returned_matches",
+            payload.get("returned", metrics.get("returned_matches", 0)),
+        )
+        metrics["truncated"] = bool(payload.get("truncated"))
         return ToolResponse(text=_json_dumps_compact(payload)), 0.0, metrics
 
     async def calc_reward(self, instance_id: str, **kwargs) -> float:

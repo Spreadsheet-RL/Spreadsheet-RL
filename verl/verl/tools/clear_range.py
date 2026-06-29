@@ -14,10 +14,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
+from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
+from .recalculate import _file_signature, _recalculate_workbook_for_commit
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
 
 _A1_CELL_RE = r"[A-Z]{1,3}[0-9]{1,7}"
@@ -30,6 +31,8 @@ _SAFE_SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
+DEFAULT_MAX_RESPONSE_CHARS = 4096
+MAX_RESPONSE_CHARS = 8192
 
 
 def _sanitize_relpath(value: Any) -> Optional[Path]:
@@ -52,7 +55,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_spreadsheet_rl_data_root()
+    workspace_base = get_sheet_arena_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -107,7 +110,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
+    name = value.strip(' \t\n\r\f\v"')
     if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
         name = name[1:-1].replace("''", "'")
         return name.strip()
@@ -133,7 +136,7 @@ def _normalize_cell_range(value: str) -> str:
 
 
 def _split_sheet_cell_range(token: str) -> tuple[Optional[str], str]:
-    token = token.strip(" \t\n\r\f\v\"")
+    token = token.strip(' \t\n\r\f\v"')
     if not token:
         raise ValueError("empty cell range")
 
@@ -165,7 +168,7 @@ def _fill_missing_boundaries(
 
 
 def _get_max_string_chars() -> int:
-    raw = os.environ.get("SPREADSHEET_RL_TOOL_MAX_STRING_CHARS", "200").strip()
+    raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
         n = int(raw)
         return min(max(16, n), 100_000)
@@ -177,15 +180,15 @@ def _get_max_response_chars(config: Optional[dict[str, Any]] = None) -> int:
     config_value = None
     if isinstance(config, dict):
         config_value = config.get("max_response_chars")
-    for raw in (config_value, os.environ.get("SPREADSHEET_RL_TOOL_MAX_RESPONSE_CHARS", "").strip()):
+    for raw in (config_value, os.environ.get("SHEET_ARENA_TOOL_MAX_RESPONSE_CHARS", "").strip()):
         if raw is None:
             continue
         try:
             n = int(raw)
-            return min(max(128, n), 1000)
+            return min(max(128, n), MAX_RESPONSE_CHARS)
         except (TypeError, ValueError):
             continue
-    return 900
+    return DEFAULT_MAX_RESPONSE_CHARS
 
 
 def _truncate_str(value: str, max_chars: int) -> str:
@@ -259,8 +262,7 @@ def _scan_zip_metadata(
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -370,29 +372,45 @@ def _sample_indices(total: int, *, head: int, tail: int) -> list[int]:
     return indices
 
 
+def _trim_list_field(payload: dict[str, Any], field: str, *, head: int, tail: int) -> None:
+    values = payload.get(field)
+    if not isinstance(values, list) or len(values) <= head + tail:
+        return
+    payload[field] = values[:head] + (values[-tail:] if tail > 0 else [])
+
+
 def _truncate_payload_to_max_chars(payload: dict[str, Any], max_chars: int) -> str:
     response_text = _json_dumps_compact(payload)
     if len(response_text) <= max_chars:
         return response_text
 
     payload["truncated"] = True
-    samples_out = payload.get("samples")
-    if not isinstance(samples_out, list):
-        return _json_dumps_compact(payload)
 
-    for head, tail in ((2, 2), (1, 1)):
-        if len(samples_out) > head + tail:
-            payload["samples"] = samples_out[:head] + samples_out[-tail:]
-            samples_out = payload.get("samples")
+    for head, tail in ((2, 2), (1, 1), (1, 0), (0, 0)):
+        _trim_list_field(payload, "samples", head=head, tail=tail)
+        _trim_list_field(payload, "cleared_merged_anchors", head=head, tail=tail)
         response_text = _json_dumps_compact(payload)
         if len(response_text) <= max_chars:
             return response_text
 
-    if len(response_text) > max_chars and isinstance(samples_out, list) and len(samples_out) > 1:
-        payload["samples"] = samples_out[:1]
-        response_text = _json_dumps_compact(payload)
+    minimal_payload = {
+        "status": payload.get("status"),
+        "file": payload.get("file"),
+        "sheet": payload.get("sheet"),
+        "range": payload.get("range"),
+        "cleared_cells": payload.get("cleared_cells"),
+        "truncated": True,
+    }
+    response_text = _json_dumps_compact(minimal_payload)
+    if len(response_text) <= max_chars:
+        return response_text
 
-    return response_text
+    compact_payload = {
+        "status": payload.get("status"),
+        "cleared_cells": payload.get("cleared_cells"),
+        "truncated": True,
+    }
+    return _json_dumps_compact(compact_payload)
 
 
 def _clear_range_in_workbook(
@@ -403,6 +421,9 @@ def _clear_range_in_workbook(
     lock_timeout_s: float,
     max_iter_cells: int,
     max_scan_cells: int,
+    recalc_url: str,
+    recalc_timeout_s: float,
+    max_response_bytes: Optional[int],
 ) -> tuple[str, str, int, list[dict[str, Any]], list[str]]:
     try:
         from openpyxl import load_workbook
@@ -416,6 +437,7 @@ def _clear_range_in_workbook(
     try:
         try:
             orig_mode = stat.S_IMODE(file_path.stat().st_mode)
+            expected_sig = _file_signature(file_path)
         except OSError as exc:
             raise RuntimeError(f"failed to stat workbook: {exc}") from None
 
@@ -648,7 +670,13 @@ def _clear_range_in_workbook(
         ]
 
         if cleared_cells == 0:
-            return resolved_sheet_name, f"{sheet_ref}!{normalized_range}", cleared_cells, samples, cleared_merged_anchors
+            return (
+                resolved_sheet_name,
+                f"{sheet_ref}!{normalized_range}",
+                cleared_cells,
+                samples,
+                cleared_merged_anchors,
+            )
 
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{file_path.name}.",
@@ -670,6 +698,37 @@ def _clear_range_in_workbook(
             os.chmod(tmp_path, orig_mode)
         except OSError:
             pass
+        if recalc_url:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+                wb = None
+            try:
+                lock_file.close()
+            except Exception:
+                pass
+            lock_file = None
+            recalc_content = _recalculate_workbook_for_commit(
+                url=recalc_url,
+                file_path=tmp_path,
+                filename=file_path.name,
+                timeout_s=recalc_timeout_s,
+                max_response_bytes=max_response_bytes,
+            )
+            tmp_path.write_bytes(recalc_content)
+            try:
+                os.chmod(tmp_path, orig_mode)
+            except OSError:
+                pass
+            lock_file = _acquire_lockfile(file_path.with_suffix(file_path.suffix + ".lock"), timeout_s=lock_timeout_s)
+            try:
+                current_sig = _file_signature(file_path)
+            except OSError as exc:
+                raise RuntimeError(f"failed to stat workbook before recalc writeback: {exc}") from None
+            if current_sig != expected_sig:
+                raise RuntimeError("workbook changed since clear request; aborting writeback")
         os.replace(tmp_path, file_path)
         tmp_path = None
     finally:
@@ -683,10 +742,11 @@ def _clear_range_in_workbook(
                 wb.close()
             except Exception:
                 pass
-        try:
-            lock_file.close()
-        except Exception:
-            pass
+        if lock_file is not None:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
 
     return resolved_sheet_name, f"{sheet_ref}!{normalized_range}", cleared_cells, samples, cleared_merged_anchors
 
@@ -713,17 +773,32 @@ class ClearRangeTool(BaseTool):
         self.lock_timeout_s = max(0.0, lock_timeout_s)
         self.max_response_chars = _get_max_response_chars(config)
 
-        max_iter_cells_raw = config.get("max_iter_cells", os.environ.get("SPREADSHEET_RL_CLEAR_RANGE_MAX_ITER_CELLS", "50000"))
+        max_iter_cells_raw = config.get(
+            "max_iter_cells", os.environ.get("SHEET_ARENA_CLEAR_RANGE_MAX_ITER_CELLS", "50000")
+        )
         try:
             self.max_iter_cells = max(1, int(max_iter_cells_raw))
         except (TypeError, ValueError):
             self.max_iter_cells = 50_000
 
-        max_scan_cells_raw = config.get("max_scan_cells", os.environ.get("SPREADSHEET_RL_CLEAR_RANGE_MAX_SCAN_CELLS", "500000"))
+        max_scan_cells_raw = config.get(
+            "max_scan_cells", os.environ.get("SHEET_ARENA_CLEAR_RANGE_MAX_SCAN_CELLS", "500000")
+        )
         try:
             self.max_scan_cells = max(0, int(max_scan_cells_raw))
         except (TypeError, ValueError):
             self.max_scan_cells = 500_000
+
+        self.recalc_url = (
+            str(config.get("recalc_url") or "").strip()
+            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or "http://127.0.0.1:5000/recalculate"
+        )
+        recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
+        try:
+            self.recalc_timeout_s = max(0.0, float(recalc_timeout_s_raw))
+        except (TypeError, ValueError):
+            self.recalc_timeout_s = 180.0
 
     async def create(self, instance_id: Optional[str] = None, **kwargs) -> tuple[str, ToolResponse]:
         if instance_id is None:
@@ -741,63 +816,101 @@ class ClearRangeTool(BaseTool):
             if relpath is None:
                 return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
         if relpath.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         range_raw = parameters.get("range")
         if not isinstance(range_raw, str) or not range_raw.strip():
-            return ToolResponse(text="Error: range must be a non-empty A1 range (e.g. A1:C3 or Sheet1!B2:D10)."), 0.0, {
-                "status": "error",
-                "error": "invalid_range",
-            }
+            return (
+                ToolResponse(text="Error: range must be a non-empty A1 range (e.g. A1:C3 or Sheet1!B2:D10)."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_range",
+                },
+            )
         range_token = range_raw.strip()
         sheet_name_raw = parameters.get("sheet_name")
         sheet_name = None
         if sheet_name_raw is not None:
             if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-                return ToolResponse(text="Error: sheet_name must be a non-empty string."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name must be a non-empty string."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             sheet_name = _normalize_sheet_name(sheet_name_raw)
             if not sheet_name:
-                return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name is empty after normalization."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
         file_path = _resolve_workspace_file(workspace_id=workspace_id, relpath=relpath)
         if file_path is None:
-            return ToolResponse(text=f"Error: file not found: {relpath}"), 0.0, {
-                "status": "error",
-                "error": "file_not_found",
-            }
+            return (
+                ToolResponse(text=f"Error: file not found: {relpath}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "file_not_found",
+                },
+            )
         if self.max_file_size_bytes is not None:
             try:
                 file_size = file_path.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to stat file: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "stat_failed",
+                    },
+                )
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return (
+                    ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "file_too_large",
+                    },
+                )
 
         try:
-            resolved_sheet_name, resolved_range, cleared_cells, samples, cleared_merged_anchors = await asyncio.to_thread(
+            (
+                resolved_sheet_name,
+                resolved_range,
+                cleared_cells,
+                samples,
+                cleared_merged_anchors,
+            ) = await asyncio.to_thread(
                 _clear_range_in_workbook,
                 file_path=file_path,
                 sheet_name=sheet_name,
@@ -805,14 +918,21 @@ class ClearRangeTool(BaseTool):
                 lock_timeout_s=self.lock_timeout_s,
                 max_iter_cells=self.max_iter_cells,
                 max_scan_cells=self.max_scan_cells,
+                recalc_url=self.recalc_url,
+                recalc_timeout_s=self.recalc_timeout_s,
+                max_response_bytes=self.max_file_size_bytes,
             )
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return ToolResponse(text=f"Error: failed to clear range: {exc}"), 0.0, {
-                "status": "error",
-                "error": "clear_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: failed to clear range: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "clear_failed",
+                },
+            )
 
         payload: dict[str, Any] = {
             "status": "success",

@@ -1,9 +1,10 @@
 tools:
   - class_name: "verl.tools.recalculate.RecalculateAndReadTool"
     config:
-      recalc_url: "${oc.env:SPREADSHEET_RL_RECALC_URL,http://127.0.0.1:5000/recalculate}"
+      recalc_url: "${oc.env:SHEET_ARENA_RECALC_URL,http://127.0.0.1:5000/recalculate}"
       timeout_s: 180
       max_file_size_mb: 100
+      max_response_chars: 4096
       type: native
 
     tool_schema:

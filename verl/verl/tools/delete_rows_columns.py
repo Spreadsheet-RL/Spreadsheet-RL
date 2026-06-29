@@ -12,10 +12,11 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
+from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
+from .recalculate import _file_signature, _recalculate_workbook_for_commit
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
 
 _EXCEL_MAX_ROWS = 1_048_576
@@ -159,7 +160,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_spreadsheet_rl_data_root()
+    workspace_base = get_sheet_arena_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -388,6 +389,9 @@ def _delete_rows_in_workbook(
     rows_token: list[str],
     lock_timeout_s: float,
     max_delete_rows: int,
+    recalc_url: str,
+    recalc_timeout_s: float,
+    max_response_bytes: Optional[int],
 ) -> tuple[str, str, int, int, int]:
     try:
         from openpyxl import load_workbook
@@ -410,8 +414,9 @@ def _delete_rows_in_workbook(
 
         try:
             orig_mode = stat.S_IMODE(file_path.stat().st_mode)
-        except OSError:
-            orig_mode = 0o644
+            expected_sig = _file_signature(file_path)
+        except OSError as exc:
+            raise RuntimeError(f"failed to stat workbook: {exc}") from None
 
         try:
             wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
@@ -454,6 +459,8 @@ def _delete_rows_in_workbook(
 
         for start_row, end_row in reversed(merged_ranges):
             ws.delete_rows(start_row, end_row - start_row + 1)
+        remaining_rows = int(getattr(ws, "max_row", 0) or 0)
+        remaining_cols = int(getattr(ws, "max_column", 0) or 0)
 
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{file_path.name}.",
@@ -475,11 +482,42 @@ def _delete_rows_in_workbook(
             os.chmod(tmp_path, orig_mode)
         except OSError:
             pass
+        if recalc_url:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+                wb = None
+            try:
+                lock_file.close()
+            except Exception:
+                pass
+            lock_file = None
+            recalc_content = _recalculate_workbook_for_commit(
+                url=recalc_url,
+                file_path=tmp_path,
+                filename=file_path.name,
+                timeout_s=recalc_timeout_s,
+                max_response_bytes=max_response_bytes,
+            )
+            tmp_path.write_bytes(recalc_content)
+            try:
+                os.chmod(tmp_path, orig_mode)
+            except OSError:
+                pass
+            lock_file = _acquire_lockfile(file_path.with_suffix(file_path.suffix + ".lock"), lock_timeout_s)
+            try:
+                current_sig = _file_signature(file_path)
+            except OSError as exc:
+                raise RuntimeError(f"failed to stat workbook before recalc writeback: {exc}") from None
+            if current_sig != expected_sig:
+                raise RuntimeError("workbook changed since delete rows request; aborting writeback")
         os.replace(tmp_path, file_path)
         tmp_path = None
 
         out_range = _format_row_ranges_for_output(resolved_sheet, merged_ranges)
-        return resolved_sheet, out_range, amount, int(getattr(ws, "max_row", 0) or 0), int(getattr(ws, "max_column", 0) or 0)
+        return resolved_sheet, out_range, amount, remaining_rows, remaining_cols
     finally:
         if tmp_path is not None:
             try:
@@ -491,10 +529,11 @@ def _delete_rows_in_workbook(
                 wb.close()
             except Exception:
                 pass
-        try:
-            lock_file.close()
-        except Exception:
-            pass
+        if lock_file is not None:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
 
 
 def _delete_columns_in_workbook(
@@ -504,6 +543,9 @@ def _delete_columns_in_workbook(
     columns_token: list[str],
     lock_timeout_s: float,
     max_delete_cols: int,
+    recalc_url: str,
+    recalc_timeout_s: float,
+    max_response_bytes: Optional[int],
 ) -> tuple[str, str, int, int, int]:
     try:
         from openpyxl import load_workbook
@@ -526,8 +568,9 @@ def _delete_columns_in_workbook(
 
         try:
             orig_mode = stat.S_IMODE(file_path.stat().st_mode)
-        except OSError:
-            orig_mode = 0o644
+            expected_sig = _file_signature(file_path)
+        except OSError as exc:
+            raise RuntimeError(f"failed to stat workbook: {exc}") from None
 
         try:
             wb = load_workbook(filename=str(file_path), keep_vba=False, data_only=False, keep_links=True)
@@ -570,6 +613,8 @@ def _delete_columns_in_workbook(
 
         for start_idx, end_idx in reversed(merged_ranges):
             ws.delete_cols(start_idx, end_idx - start_idx + 1)
+        remaining_rows = int(getattr(ws, "max_row", 0) or 0)
+        remaining_cols = int(getattr(ws, "max_column", 0) or 0)
 
         fd, tmp_name = tempfile.mkstemp(
             prefix=f".{file_path.name}.",
@@ -591,11 +636,42 @@ def _delete_columns_in_workbook(
             os.chmod(tmp_path, orig_mode)
         except OSError:
             pass
+        if recalc_url:
+            if wb is not None:
+                try:
+                    wb.close()
+                except Exception:
+                    pass
+                wb = None
+            try:
+                lock_file.close()
+            except Exception:
+                pass
+            lock_file = None
+            recalc_content = _recalculate_workbook_for_commit(
+                url=recalc_url,
+                file_path=tmp_path,
+                filename=file_path.name,
+                timeout_s=recalc_timeout_s,
+                max_response_bytes=max_response_bytes,
+            )
+            tmp_path.write_bytes(recalc_content)
+            try:
+                os.chmod(tmp_path, orig_mode)
+            except OSError:
+                pass
+            lock_file = _acquire_lockfile(file_path.with_suffix(file_path.suffix + ".lock"), lock_timeout_s)
+            try:
+                current_sig = _file_signature(file_path)
+            except OSError as exc:
+                raise RuntimeError(f"failed to stat workbook before recalc writeback: {exc}") from None
+            if current_sig != expected_sig:
+                raise RuntimeError("workbook changed since delete columns request; aborting writeback")
         os.replace(tmp_path, file_path)
         tmp_path = None
 
         out_range = _format_column_ranges_for_output(resolved_sheet, merged_ranges)
-        return resolved_sheet, out_range, amount, int(getattr(ws, "max_row", 0) or 0), int(getattr(ws, "max_column", 0) or 0)
+        return resolved_sheet, out_range, amount, remaining_rows, remaining_cols
     finally:
         if tmp_path is not None:
             try:
@@ -607,10 +683,11 @@ def _delete_columns_in_workbook(
                 wb.close()
             except Exception:
                 pass
-        try:
-            lock_file.close()
-        except Exception:
-            pass
+        if lock_file is not None:
+            try:
+                lock_file.close()
+            except Exception:
+                pass
 
 
 class DeleteRowsTool(BaseTool):
@@ -634,11 +711,22 @@ class DeleteRowsTool(BaseTool):
             lock_timeout_s = 30.0
         self.lock_timeout_s = max(0.0, lock_timeout_s)
 
-        max_delete_rows_raw = config.get("max_delete_rows", os.environ.get("SPREADSHEET_RL_DELETE_ROWS_MAX", "10000"))
+        max_delete_rows_raw = config.get("max_delete_rows", os.environ.get("SHEET_ARENA_DELETE_ROWS_MAX", "10000"))
         try:
             self.max_delete_rows = max(0, int(max_delete_rows_raw))
         except (TypeError, ValueError):
             self.max_delete_rows = 10_000
+
+        self.recalc_url = (
+            str(config.get("recalc_url") or "").strip()
+            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or "http://127.0.0.1:5000/recalculate"
+        )
+        recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
+        try:
+            self.recalc_timeout_s = max(0.0, float(recalc_timeout_s_raw))
+        except (TypeError, ValueError):
+            self.recalc_timeout_s = 180.0
 
     async def create(self, instance_id: Optional[str] = None, **kwargs) -> tuple[str, ToolResponse]:
         if instance_id is None:
@@ -723,6 +811,9 @@ class DeleteRowsTool(BaseTool):
                 rows_token=rows_token,
                 lock_timeout_s=self.lock_timeout_s,
                 max_delete_rows=self.max_delete_rows,
+                recalc_url=self.recalc_url,
+                recalc_timeout_s=self.recalc_timeout_s,
+                max_response_bytes=self.max_file_size_bytes,
             )
         except asyncio.CancelledError:
             raise
@@ -777,11 +868,22 @@ class DeleteColumnsTool(BaseTool):
             lock_timeout_s = 30.0
         self.lock_timeout_s = max(0.0, lock_timeout_s)
 
-        max_delete_cols_raw = config.get("max_delete_cols", os.environ.get("SPREADSHEET_RL_DELETE_COLS_MAX", "1000"))
+        max_delete_cols_raw = config.get("max_delete_cols", os.environ.get("SHEET_ARENA_DELETE_COLS_MAX", "1000"))
         try:
             self.max_delete_cols = max(0, int(max_delete_cols_raw))
         except (TypeError, ValueError):
             self.max_delete_cols = 1000
+
+        self.recalc_url = (
+            str(config.get("recalc_url") or "").strip()
+            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or "http://127.0.0.1:5000/recalculate"
+        )
+        recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
+        try:
+            self.recalc_timeout_s = max(0.0, float(recalc_timeout_s_raw))
+        except (TypeError, ValueError):
+            self.recalc_timeout_s = 180.0
 
     async def create(self, instance_id: Optional[str] = None, **kwargs) -> tuple[str, ToolResponse]:
         if instance_id is None:
@@ -866,6 +968,9 @@ class DeleteColumnsTool(BaseTool):
                 columns_token=columns_token,
                 lock_timeout_s=self.lock_timeout_s,
                 max_delete_cols=self.max_delete_cols,
+                recalc_url=self.recalc_url,
+                recalc_timeout_s=self.recalc_timeout_s,
+                max_response_bytes=self.max_file_size_bytes,
             )
         except asyncio.CancelledError:
             raise
