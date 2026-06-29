@@ -18,6 +18,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 🧰 2026-06-29: Improved spreadsheet-native tool scaffolding with compact response envelopes, expanded range inspection, sheet discovery, and range write, copy, and format operations.
 - 🧪 2026-06-09: Added [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz) to the Spreadsheet-RL dataset, including verified spreadsheet artifacts and parser-specific parquet splits.
 - 🔄 2026-06-03: Refreshed spreadsheet artifacts, removing samples with abnormal recalculation behavior, including excessive latency and memory usage; corresponding parquet splits are also updated.
 - 🚀 2026-05-23: Released the Spreadsheet-RL-4B model checkpoint on Hugging Face at [Spreadsheet-RL/Spreadsheet-RL-4B](https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-4B), the RL-trained `Qwen/Qwen3-4B-Thinking-2507` spreadsheet agent used in the paper.
