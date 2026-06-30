@@ -18,6 +18,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 📊 2026-06-30: Integrated [SpreadsheetBench-2](https://huggingface.co/datasets/KAKA22/SpreadsheetBench-v2) non-visual tasks into the Spreadsheet-RL dataset, adding 297 recalculated Debugging, Financial_Model, and Template tasks plus parser-specific `test_2_*` parquet splits.
 - 🧰 2026-06-29: Improved spreadsheet-native tool scaffolding with compact response envelopes, expanded range inspection, sheet discovery, and range write, copy, and format operations.
 - 🧪 2026-06-09: Added [SpreadsheetBench-Verified](https://huggingface.co/datasets/KAKA22/SpreadsheetBench/blob/main/spreadsheetbench_verified_400.tar.gz) to the Spreadsheet-RL dataset, including verified spreadsheet artifacts and parser-specific parquet splits.
 - 🔄 2026-06-03: Refreshed spreadsheet artifacts, removing samples with abnormal recalculation behavior, including excessive latency and memory usage; corresponding parquet splits are also updated.
@@ -109,17 +110,19 @@ The released dataset is hosted at [`Spreadsheet-RL/Spreadsheet-RL`](https://hugg
 | `train_qwen3_coder.parquet` | 5,925 | training split with Qwen3-Coder tool-call formatting |
 | `test_hermes.parquet` | 2,722 | SpreadsheetBench evaluation split with Hermes formatting |
 | `test_qwen3_coder.parquet` | 2,722 | SpreadsheetBench evaluation split with Qwen3-Coder formatting |
+| `test_2_hermes.parquet` | 297 | SpreadsheetBench-2 non-visual evaluation split with Hermes formatting |
+| `test_2_qwen3_coder.parquet` | 297 | SpreadsheetBench-2 non-visual evaluation split with Qwen3-Coder formatting |
 | `test_verified_hermes.parquet` | 400 | SpreadsheetBench-Verified evaluation split with Hermes formatting |
 | `test_verified_qwen3_coder.parquet` | 400 | SpreadsheetBench-Verified evaluation split with Qwen3-Coder formatting |
 | `test_domain_hermes.parquet` | 1,662 | Domain-Spreadsheet evaluation split with Hermes formatting |
 | `test_domain_qwen3_coder.parquet` | 1,662 | Domain-Spreadsheet evaluation split with Qwen3-Coder formatting |
-| `spreadsheets.zip` | 10,709 tasks | workbook files and task metadata |
+| `spreadsheets.zip` | 11,006 tasks | workbook files and task metadata |
 
-Parquet filenames follow `train_<parser_type>.parquet`, `test_<parser_type>.parquet`, `test_verified_<parser_type>.parquet`, and `test_domain_<parser_type>.parquet`. In the paper, `train` is the training split, `test` is SpreadsheetBench, `test_verified` is SpreadsheetBench-Verified, and `test_domain` is Domain-Spreadsheet. The parquet schema is `data_source`, `agent_name`, `prompt`, `ability`, `reward_model`, and `extra_info`.
+Parquet filenames follow `train_<parser_type>.parquet`, `test_<parser_type>.parquet`, `test_2_<parser_type>.parquet`, `test_verified_<parser_type>.parquet`, and `test_domain_<parser_type>.parquet`. In the paper, `train` is the training split, `test` is SpreadsheetBench, `test_2` is the non-visual subset of SpreadsheetBench-2, `test_verified` is SpreadsheetBench-Verified, and `test_domain` is Domain-Spreadsheet. The parquet schema is `data_source`, `agent_name`, `prompt`, `ability`, `reward_model`, and `extra_info`.
 
-`spreadsheets.zip` expands to `excelforum/`, `spreadsheetbench/`, `spreadsheetbench_verified/`, and `domain/`. Each task directory contains `instruction.json`, `input.xlsx`, `output.xlsx`, and `target.xlsx`. The archive contains 5,925 ExcelForum training tasks, 2,722 SpreadsheetBench tasks, 400 SpreadsheetBench-Verified tasks, and 1,662 Domain-Spreadsheet tasks.
+`spreadsheets.zip` expands to `excelforum/`, `spreadsheetbench/`, `spreadsheetbench_2/`, `spreadsheetbench_verified/`, and `domain/`. Each task directory contains `instruction.json`, `input.xlsx`, `output.xlsx`, and `target.xlsx`. The archive contains 5,925 ExcelForum training tasks, 2,722 SpreadsheetBench tasks, 297 SpreadsheetBench-2 non-visual tasks, 400 SpreadsheetBench-Verified tasks, and 1,662 Domain-Spreadsheet tasks. The SpreadsheetBench-2 subset contains 100 Debugging, 100 Financial_Model, and 97 Template tasks; Visualization tasks are excluded because they require VLM evaluation.
 
-The default Qwen3 4B launcher trains on `train_hermes.parquet` and validates on `test_hermes.parquet` from `SPREADSHEET_RL_DATA_ROOT`. For SpreadsheetBench-Verified validation, set `TEST_FILE=test_verified_hermes.parquet`; for Domain-Spreadsheet validation, set `TEST_FILE=test_domain_hermes.parquet`. For Qwen3-Coder parser data, use the corresponding `*_qwen3_coder.parquet` files and set `actor_rollout_ref.rollout.multi_turn.format=qwen3_coder`.
+The default Qwen3 4B launcher trains on `train_hermes.parquet` and validates on `test_hermes.parquet` from `SPREADSHEET_RL_DATA_ROOT`. For SpreadsheetBench-2 validation, set `TEST_FILE=test_2_hermes.parquet`; for SpreadsheetBench-Verified validation, set `TEST_FILE=test_verified_hermes.parquet`; for Domain-Spreadsheet validation, set `TEST_FILE=test_domain_hermes.parquet`. For Qwen3-Coder parser data, use the corresponding `*_qwen3_coder.parquet` files and set `actor_rollout_ref.rollout.multi_turn.format=qwen3_coder`.
 
 For Slurm, the launcher downloads and wires the released Hugging Face dataset on every node. Override the repo id only if you have mirrored the dataset:
 
