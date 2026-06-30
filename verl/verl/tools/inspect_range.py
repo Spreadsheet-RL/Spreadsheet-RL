@@ -612,13 +612,26 @@ def _records_to_preview_csv(records: list[dict[str, Any]]) -> str:
     return _csv_dumps(rows)
 
 
-def _records_to_cells_csv(records: list[dict[str, Any]], *, include_formula: bool) -> str:
-    columns: list[str] = ["address", "value"]
-    if include_formula:
-        columns.append("formula")
-    rows: list[list[Any]] = [columns]
+def _addressed_cell_value(record: dict[str, Any], field: str) -> str:
+    value = _csv_value(record.get(field))
+    return f"{record.get('address', '')}:{value}"
+
+
+def _records_to_addressed_grid_csv(records: list[dict[str, Any]], *, field: str) -> str:
+    if not records:
+        return ""
+    rows_by_number: dict[int, list[dict[str, Any]]] = {}
     for record in records:
-        rows.append([record.get(column) for column in columns])
+        try:
+            row_num = int(record["row"])
+            int(record["col"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        rows_by_number.setdefault(row_num, []).append(record)
+    rows: list[list[Any]] = []
+    for row_num in sorted(rows_by_number):
+        row_records = sorted(rows_by_number[row_num], key=lambda item: int(item["col"]))
+        rows.append([_addressed_cell_value(record, field) for record in row_records])
     return _csv_dumps(rows)
 
 
@@ -639,12 +652,16 @@ def _set_payload_csv_data(
     truncated: bool,
 ) -> None:
     use_preview = preview and not truncated and not include_formula
-    payload["format"] = "preview_csv" if use_preview else "cells_csv"
-    payload["data"] = (
-        _records_to_preview_csv(records)
-        if use_preview
-        else _records_to_cells_csv(records, include_formula=include_formula)
-    )
+    payload["format"] = "preview_csv" if use_preview else "addressed_grid_csv"
+    if use_preview:
+        payload["data"] = _records_to_preview_csv(records)
+        payload.pop("formula_data", None)
+    else:
+        payload["data"] = _records_to_addressed_grid_csv(records, field="value")
+        if include_formula:
+            payload["formula_data"] = _records_to_addressed_grid_csv(records, field="formula")
+        else:
+            payload.pop("formula_data", None)
     payload["returned_cells"] = len(records)
 
 
@@ -661,25 +678,38 @@ def _trim_csv_data_for_payload(item: dict[str, Any], *, max_data_rows: int) -> i
     rows = _csv_load_rows(item.get("data"))
     if not rows:
         item.pop("data", None)
+        item.pop("formula_data", None)
         item["returned_cells"] = 0
         return 0
 
-    header = rows[0]
-    data_rows = rows[1:]
+    has_header = item.get("format") in {"preview_csv", "cells_csv"}
+    header = rows[0] if has_header else None
+    data_rows = rows[1:] if has_header else rows
+    formula_rows = _csv_load_rows(item.get("formula_data")) if item.get("format") == "addressed_grid_csv" else []
+    formula_data_rows = formula_rows[1:] if has_header and formula_rows else formula_rows
     if max_data_rows <= 0:
         item.pop("data", None)
+        item.pop("formula_data", None)
         item["returned_cells"] = 0
         return 0
     if len(data_rows) <= max_data_rows:
         kept_rows = data_rows
+        kept_formula_rows = formula_data_rows
     else:
         head = max_data_rows // 2
         tail = max_data_rows - head
         kept_rows = data_rows[:head] + data_rows[-tail:]
+        kept_formula_rows = formula_data_rows[:head] + formula_data_rows[-tail:] if formula_data_rows else []
 
-    item["data"] = _csv_dumps([header, *kept_rows])
+    item["data"] = _csv_dumps([header, *kept_rows] if header is not None else kept_rows)
+    if formula_rows:
+        item["formula_data"] = _csv_dumps(
+            [formula_rows[0], *kept_formula_rows] if has_header else kept_formula_rows
+        )
     if item.get("format") == "preview_csv":
         returned_cells = sum(max(len(row) - 1, 0) for row in kept_rows)
+    elif item.get("format") == "addressed_grid_csv":
+        returned_cells = sum(len(row) for row in kept_rows)
     else:
         returned_cells = len(kept_rows)
     item["returned_cells"] = returned_cells
@@ -1985,7 +2015,7 @@ class InspectRangeTool(BaseTool):
         if not isinstance(include_formula_raw, bool):
             return _error_response("invalid_include_formula", "include_formula must be a boolean.")
         include_formula = bool(include_formula_raw)
-        preview_raw = parameters.get("preview", True)
+        preview_raw = parameters.get("preview", False)
         if not isinstance(preview_raw, bool):
             return _error_response("invalid_preview", "preview must be a boolean.")
         preview = bool(preview_raw)

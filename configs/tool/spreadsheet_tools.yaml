@@ -11,7 +11,7 @@ tools:
       type: "function"
       function:
         name: "inspect_range"
-        description: "Inspect one or more A1 ranges in a workbook. Returns a compact JSON envelope with CSV data: preview_csv by default, or cells_csv when preview=false. Can optionally include formulas, formatting, and sheet metadata."
+        description: "Inspect one or more A1 ranges in a workbook. By default returns addressed_grid_csv, where each CSV field is address:value and rows preserve worksheet layout. Set preview=true for compact preview_csv. Can optionally include formulas, formatting, and sheet metadata."
         parameters:
           type: "object"
           properties:
@@ -37,7 +37,7 @@ tools:
               description: "If true, include each cell's raw Excel formula when present. Default false."
             preview:
               type: "boolean"
-              description: "If true, return a compact row/column preview CSV in data. If false, return per-cell CSV rows in data. Default true. When include_formula=true, returns cells_csv so formulas are included."
+              description: "If true, return compact preview_csv. If false, return addressed_grid_csv. Default false. When include_formula=true, formula_data contains a parallel addressed formula grid."
           required: []
 
   - class_name: "verl.tools.list_sheets.ListSheetsTool"
@@ -118,7 +118,7 @@ tools:
       type: "function"
       function:
         name: "write_range"
-        description: "Write static values and/or formulas to a rectangular cell range. Returns compact JSON with written_range, written_cells, overwrite counts, and small samples. Does not recalculate formulas; call recalculate_and_read afterward when updated formula values are needed."
+        description: "Write a rectangular grid of static values and/or formulas. Prefer fill_formula for repeated formulas over a contiguous range. Does not recalculate formulas; call recalculate_and_read afterward when calculated values matter."
         parameters:
           type: "object"
           properties:
@@ -130,20 +130,20 @@ tools:
               description: "Optional worksheet name. If range or start_cell includes a sheet name, it must match sheet_name."
             range:
               type: "string"
-              description: "Target A1 range (e.g. A1:C3 or Sheet1!B2:D10). Its size must match the values/formulas grid."
+              description: "Target A1 range (e.g. A1:C3 or Sheet1!B2:D10). Its size must match the rectangular values/formulas grid."
             start_cell:
               type: "string"
               description: "Alternative to range: top-left target cell (e.g. A1 or Sheet1!B2). The target size is inferred from the values/formulas grid."
             values:
               type: "array"
-              description: "2D array of static JSON scalar values to write. Strings beginning with = are written as text; use formulas for formulas."
+              description: "Rectangular 2D array of static JSON scalar values. Strings beginning with = are written as text; use formulas for formulas."
               items:
                 type: "array"
                 items:
                   type: ["string", "number", "boolean", "null"]
             formulas:
               type: "array"
-              description: "2D array of formulas to write. Use null in cells that should be written from values instead."
+              description: "Rectangular 2D array of formula strings. Use null only for cells written from values instead."
               items:
                 type: "array"
                 items:
@@ -165,7 +165,7 @@ tools:
       type: "function"
       function:
         name: "copy_range"
-        description: "Copy a finite rectangular cell range, including values/formulas, styles, comments, and hyperlinks. Destination may be a top-left cell or same-sized range. Returns compact JSON with source_range, destination_range, copied_cells, and sample_csv. Does not recalculate formulas."
+        description: "Copy a finite rectangular cell range, including values/formulas, styles, comments, and hyperlinks. Destination may be a top-left cell, a same-sized range, or a larger range when source_range is one cell. Does not recalculate formulas."
         parameters:
           type: "object"
           properties:
@@ -186,7 +186,7 @@ tools:
               description: "Finite source A1 range, e.g. A1:C3 or Sheet1!B2:D10."
             destination_range:
               type: "string"
-              description: "Destination top-left cell or same-sized finite A1 range, e.g. E1 or Sheet2!E1:G3."
+              description: "Destination top-left cell, same-sized finite A1 range, or larger fill range for one-cell source, e.g. E1 or Sheet2!E1:G3."
           required: ["source_range", "destination_range"]
 
   - class_name: "verl.tools.format_range.FormatRangeTool"

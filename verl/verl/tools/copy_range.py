@@ -179,9 +179,11 @@ def _resolve_destination_ref(
     if token_had_range:
         dest_rows = max_row - min_row + 1
         dest_cols = max_col - min_col + 1
-        if dest_rows != source_ref.rows or dest_cols != source_ref.cols:
+        is_single_cell_fill = source_ref.cells == 1 and dest_rows * dest_cols > 1
+        if not is_single_cell_fill and (dest_rows != source_ref.rows or dest_cols != source_ref.cols):
             raise RuntimeError(
-                "destination range must be a single top-left cell or match source dimensions "
+                "destination range must be a single top-left cell, match source dimensions, "
+                "or be larger only when source_range is one cell "
                 f"(source={source_ref.rows}x{source_ref.cols}, destination={dest_rows}x{dest_cols})"
             )
     else:
@@ -427,23 +429,41 @@ def _copy_range_in_workbook(
         )
         if max_copy_cells > 0 and source_ref.cells > max_copy_cells:
             raise RuntimeError(f"source range is too large (cells={source_ref.cells} > {max_copy_cells})")
+        if max_copy_cells > 0 and dest_ref.cells > max_copy_cells:
+            raise RuntimeError(f"destination range is too large (cells={dest_ref.cells} > {max_copy_cells})")
         snapshots = _snapshot_source_cells(source_ws, source_ref)
 
         copied_cells = 0
         skipped_merged_cells = 0
-        idx = 0
-        for row_offset in range(source_ref.rows):
-            for col_offset in range(source_ref.cols):
-                snapshot = snapshots[idx]
-                idx += 1
-                dest_row = dest_ref.min_row + row_offset
-                dest_col = dest_ref.min_col + col_offset
-                dest_cell = dest_ws.cell(row=dest_row, column=dest_col)
-                if isinstance(dest_cell, MergedCell):
-                    skipped_merged_cells += 1
-                    continue
-                _apply_cell_snapshot(snapshot=snapshot, dest_cell=dest_cell, dest_row=dest_row, dest_col=dest_col)
-                copied_cells += 1
+        if source_ref.cells == 1 and dest_ref.cells > 1:
+            snapshot = snapshots[0]
+            for dest_row in range(dest_ref.min_row, dest_ref.max_row + 1):
+                for dest_col in range(dest_ref.min_col, dest_ref.max_col + 1):
+                    dest_cell = dest_ws.cell(row=dest_row, column=dest_col)
+                    if isinstance(dest_cell, MergedCell):
+                        skipped_merged_cells += 1
+                        continue
+                    _apply_cell_snapshot(
+                        snapshot=snapshot,
+                        dest_cell=dest_cell,
+                        dest_row=dest_row,
+                        dest_col=dest_col,
+                    )
+                    copied_cells += 1
+        else:
+            idx = 0
+            for row_offset in range(source_ref.rows):
+                for col_offset in range(source_ref.cols):
+                    snapshot = snapshots[idx]
+                    idx += 1
+                    dest_row = dest_ref.min_row + row_offset
+                    dest_col = dest_ref.min_col + col_offset
+                    dest_cell = dest_ws.cell(row=dest_row, column=dest_col)
+                    if isinstance(dest_cell, MergedCell):
+                        skipped_merged_cells += 1
+                        continue
+                    _apply_cell_snapshot(snapshot=snapshot, dest_cell=dest_cell, dest_row=dest_row, dest_col=dest_col)
+                    copied_cells += 1
 
         sample_csv = _sample_destination_csv(dest_ws, dest_ref)
 
