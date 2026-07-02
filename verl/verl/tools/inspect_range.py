@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import datetime as dt
-import io
 import json
 import math
 import os
@@ -47,7 +45,7 @@ def _normalize_primary_ext(primary_ext: Any) -> Optional[str]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
+    name = value.strip(' \t\n\r\f\v"')
     if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
         name = name[1:-1].replace("''", "'")
         return name.strip()
@@ -66,7 +64,7 @@ def _normalize_cell_range(value: str) -> str:
 
 
 def _parse_sheet_cell_range(token: str, *, default_sheet_name: str) -> tuple[str, str]:
-    token = token.strip(" \t\n\r\f\v\"")
+    token = token.strip(' \t\n\r\f\v"')
     if not token:
         raise ValueError("empty cell range")
 
@@ -151,13 +149,13 @@ def _split_disjoint_range_tokens(value: str, *, max_tokens: Optional[int] = None
 def _to_jsonable_excel_value(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, (bool, int, str)):
+    if isinstance(value, bool | int | str):
         if isinstance(value, str):
             return _truncate_str(value, _get_max_string_chars())
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
-    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+    if isinstance(value, dt.datetime | dt.date | dt.time):
         return value.isoformat()
     if isinstance(value, dt.timedelta):
         return value.total_seconds()
@@ -265,34 +263,6 @@ def _json_dumps_compact(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
-def _error_response(error: str, message: str, **extra: Any) -> tuple[ToolResponse, float, dict[str, Any]]:
-    payload: dict[str, Any] = {
-        "status": "error",
-        "error": error,
-        "message": message,
-        "truncated": False,
-    }
-    payload.update({key: value for key, value in extra.items() if value is not None})
-    metrics = dict(payload)
-    return ToolResponse(text=_json_dumps_compact(payload)), 0.0, metrics
-
-
-def _csv_value(value: Any) -> Any:
-    if value is None:
-        return ""
-    if isinstance(value, (dict, list, tuple)):
-        return _json_dumps_compact(value)
-    return value
-
-
-def _csv_dumps(rows: list[list[Any]]) -> str:
-    out = io.StringIO()
-    writer = csv.writer(out, lineterminator="\n")
-    for row in rows:
-        writer.writerow([_csv_value(value) for value in row])
-    return out.getvalue().rstrip("\n")
-
-
 def _truncate_str(value: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
@@ -378,8 +348,7 @@ def _scan_zip_metadata(
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -440,9 +409,7 @@ def _merge_unquoted_comma_sheet_tokens(
             next_sheet = _normalize_sheet_name(sheet_part)
             next_sheet_key = next_sheet.casefold()
             next_sheet_exists = sheet_lookup.get(next_sheet_key) is not None
-            prefix_can_stand_alone = all(
-                _A1_RANGE_RE.fullmatch(_normalize_cell_range(part)) for part in prefix_parts
-            )
+            prefix_can_stand_alone = all(_A1_RANGE_RE.fullmatch(_normalize_cell_range(part)) for part in prefix_parts)
             if separators is None:
                 candidates = (
                     ", ".join([*prefix_parts, next_sheet]),
@@ -527,12 +494,7 @@ def _validate_range_groups(
             boundaries = range_boundaries(cell_range if ":" in cell_range else f"{cell_range}:{cell_range}")
             filled = _fill_missing_boundaries(boundaries)
             min_col, min_row, max_col, max_row = filled
-            if (
-                min_col < 1
-                or min_row < 1
-                or max_col > _EXCEL_MAX_COLS
-                or max_row > _EXCEL_MAX_ROWS
-            ):
+            if min_col < 1 or min_row < 1 or max_col > _EXCEL_MAX_COLS or max_row > _EXCEL_MAX_ROWS:
                 raise ValueError("range out of bounds")
             total_cell_count += (max_col - min_col + 1) * (max_row - min_row + 1)
 
@@ -583,137 +545,14 @@ def _get_data_only_worksheet(
 
 
 def _format_a1_address(*, sheet_name: str, row: int, col: int) -> str:
-    col_letter = _format_column_letter(col)
-    sheet_ref = _quote_sheet_name_for_a1(sheet_name)
-    return f"{sheet_ref}!{col_letter}{row}"
-
-
-def _format_column_letter(col: int) -> str:
     try:
         from openpyxl.utils.cell import get_column_letter
     except ImportError:
-        return str(col)
+        col_letter = str(col)
     else:
-        return get_column_letter(col)
-
-
-def _records_to_preview_csv(records: list[dict[str, Any]]) -> str:
-    if not records:
-        return ""
-    row_nums = sorted({int(record["row"]) for record in records})
-    col_nums = sorted({int(record["col"]) for record in records})
-    values = {
-        (int(record["row"]), int(record["col"])): record.get("value")
-        for record in records
-    }
-    rows: list[list[Any]] = [["", *[_format_column_letter(col) for col in col_nums]]]
-    for row_num in row_nums:
-        rows.append([row_num, *[values.get((row_num, col_num)) for col_num in col_nums]])
-    return _csv_dumps(rows)
-
-
-def _addressed_cell_value(record: dict[str, Any], field: str) -> str:
-    value = _csv_value(record.get(field))
-    return f"{record.get('address', '')}:{value}"
-
-
-def _records_to_addressed_grid_csv(records: list[dict[str, Any]], *, field: str) -> str:
-    if not records:
-        return ""
-    rows_by_number: dict[int, list[dict[str, Any]]] = {}
-    for record in records:
-        try:
-            row_num = int(record["row"])
-            int(record["col"])
-        except (KeyError, TypeError, ValueError):
-            continue
-        rows_by_number.setdefault(row_num, []).append(record)
-    rows: list[list[Any]] = []
-    for row_num in sorted(rows_by_number):
-        row_records = sorted(rows_by_number[row_num], key=lambda item: int(item["col"]))
-        rows.append([_addressed_cell_value(record, field) for record in row_records])
-    return _csv_dumps(rows)
-
-
-def _records_to_cell_metadata_csv(records: list[dict[str, Any]]) -> str:
-    columns = ["address", "number_format", "style"]
-    rows: list[list[Any]] = [columns]
-    for record in records:
-        rows.append([record.get(column) for column in columns])
-    return _csv_dumps(rows)
-
-
-def _set_payload_csv_data(
-    payload: dict[str, Any],
-    records: list[dict[str, Any]],
-    *,
-    preview: bool,
-    include_formula: bool,
-    truncated: bool,
-) -> None:
-    use_preview = preview and not truncated and not include_formula
-    payload["format"] = "preview_csv" if use_preview else "addressed_grid_csv"
-    if use_preview:
-        payload["data"] = _records_to_preview_csv(records)
-        payload.pop("formula_data", None)
-    else:
-        payload["data"] = _records_to_addressed_grid_csv(records, field="value")
-        if include_formula:
-            payload["formula_data"] = _records_to_addressed_grid_csv(records, field="formula")
-        else:
-            payload.pop("formula_data", None)
-    payload["returned_cells"] = len(records)
-
-
-def _csv_load_rows(text: Any) -> list[list[str]]:
-    if not isinstance(text, str) or not text:
-        return []
-    try:
-        return list(csv.reader(io.StringIO(text)))
-    except csv.Error:
-        return []
-
-
-def _trim_csv_data_for_payload(item: dict[str, Any], *, max_data_rows: int) -> int:
-    rows = _csv_load_rows(item.get("data"))
-    if not rows:
-        item.pop("data", None)
-        item.pop("formula_data", None)
-        item["returned_cells"] = 0
-        return 0
-
-    has_header = item.get("format") in {"preview_csv", "cells_csv"}
-    header = rows[0] if has_header else None
-    data_rows = rows[1:] if has_header else rows
-    formula_rows = _csv_load_rows(item.get("formula_data")) if item.get("format") == "addressed_grid_csv" else []
-    formula_data_rows = formula_rows[1:] if has_header and formula_rows else formula_rows
-    if max_data_rows <= 0:
-        item.pop("data", None)
-        item.pop("formula_data", None)
-        item["returned_cells"] = 0
-        return 0
-    if len(data_rows) <= max_data_rows:
-        kept_rows = data_rows
-        kept_formula_rows = formula_data_rows
-    else:
-        head = max_data_rows // 2
-        tail = max_data_rows - head
-        kept_rows = data_rows[:head] + data_rows[-tail:]
-        kept_formula_rows = formula_data_rows[:head] + formula_data_rows[-tail:] if formula_data_rows else []
-
-    item["data"] = _csv_dumps([header, *kept_rows] if header is not None else kept_rows)
-    if formula_rows:
-        item["formula_data"] = _csv_dumps(
-            [formula_rows[0], *kept_formula_rows] if has_header else kept_formula_rows
-        )
-    if item.get("format") == "preview_csv":
-        returned_cells = sum(max(len(row) - 1, 0) for row in kept_rows)
-    elif item.get("format") == "addressed_grid_csv":
-        returned_cells = sum(len(row) for row in kept_rows)
-    else:
-        returned_cells = len(kept_rows)
-    item["returned_cells"] = returned_cells
-    return returned_cells
+        col_letter = get_column_letter(col)
+    sheet_ref = _quote_sheet_name_for_a1(sheet_name)
+    return f"{sheet_ref}!{col_letter}{row}"
 
 
 def _sample_linear_indices(total: int, *, head: int, tail: int) -> list[int]:
@@ -778,7 +617,7 @@ def _color_to_json(color: Any) -> Any:
             continue
         if key in {"indexed", "theme"} and not isinstance(value, int):
             continue
-        if key == "tint" and not isinstance(value, (int, float)):
+        if key == "tint" and not isinstance(value, int | float):
             continue
         if key in {"type", "rgb"} and not isinstance(value, str):
             continue
@@ -941,17 +780,17 @@ def _serialisable_to_json(obj: Any, *, depth: int = 3) -> Any:
         return _color_to_json(obj) or str(obj)
     if depth <= 0:
         return str(obj)
-    if isinstance(obj, (str, bool, int)):
+    if isinstance(obj, str | bool | int):
         return obj
     if isinstance(obj, float):
         return obj if math.isfinite(obj) else str(obj)
-    if isinstance(obj, (dt.datetime, dt.date, dt.time)):
+    if isinstance(obj, dt.datetime | dt.date | dt.time):
         return obj.isoformat()
     if isinstance(obj, dt.timedelta):
         return obj.total_seconds()
     if isinstance(obj, Path):
         return str(obj)
-    if isinstance(obj, (list, tuple, set)):
+    if isinstance(obj, list | tuple | set):
         items = list(obj)
         return [_serialisable_to_json(item, depth=depth - 1) for item in items[:200]]
     if isinstance(obj, dict):
@@ -965,9 +804,9 @@ def _serialisable_to_json(obj: Any, *, depth: int = 3) -> Any:
     attrs = getattr(obj, "__attrs__", None)
     elems = getattr(obj, "__elements__", None)
     keys: list[str] = []
-    if isinstance(attrs, (tuple, list)):
+    if isinstance(attrs, tuple | list):
         keys.extend([str(item) for item in attrs])
-    if isinstance(elems, (tuple, list)):
+    if isinstance(elems, tuple | list):
         keys.extend([str(item) for item in elems])
     if keys:
         out: dict[str, Any] = {"_type": obj.__class__.__name__}
@@ -995,6 +834,18 @@ def _serialisable_to_json(obj: Any, *, depth: int = 3) -> Any:
             return out
 
     return str(obj)
+
+
+def _has_detail_payload(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value)
+    if isinstance(value, dict):
+        return any(_has_detail_payload(item) for item in value.values())
+    if isinstance(value, list | tuple | set):
+        return any(_has_detail_payload(item) for item in value)
+    return bool(value)
 
 
 @dataclass(frozen=True)
@@ -1058,19 +909,12 @@ def _build_target(wb: Any, token: str) -> _RangeTarget:
         raise ValueError(f"failed to parse range boundaries: {exc}") from None
 
     filled = _fill_missing_boundaries(boundaries)
-    if (
-        filled[0] < 1
-        or filled[1] < 1
-        or filled[2] > _EXCEL_MAX_COLS
-        or filled[3] > _EXCEL_MAX_ROWS
-    ):
+    if filled[0] < 1 or filled[1] < 1 or filled[2] > _EXCEL_MAX_COLS or filled[3] > _EXCEL_MAX_ROWS:
         raise ValueError("invalid range boundaries")
     return _RangeTarget(sheet=sheet_name, cell_range=cell_range, boundaries=filled)
 
 
-def _iter_overlapping_ranges(
-    sqref: Any, *, requested_boundaries: tuple[int, int, int, int]
-) -> list[str]:
+def _iter_overlapping_ranges(sqref: Any, *, requested_boundaries: tuple[int, int, int, int]) -> list[str]:
     tokens = _split_sqref(sqref)
     if not tokens:
         return []
@@ -1470,12 +1314,11 @@ def _extract_hidden_dims(ws: Any, *, min_row: int, max_row: int, min_col: int, m
 def _inspect_range_sync(
     *,
     file_path: Path,
+    display_file: str | None = None,
     range_token: str,
     max_cells: int,
     max_cf_rules: int,
     include_details: bool,
-    include_formula: bool,
-    preview: bool,
     max_response_chars: int,
     wb: Any | None = None,
     shared_state: Optional[dict[str, Any]] = None,
@@ -1483,7 +1326,7 @@ def _inspect_range_sync(
     close_wb = wb is None
     wb_values = None
     if wb is None:
-        wb = _load_workbook(file_path, data_only=not include_formula, read_only=not include_details)
+        wb = _load_workbook(file_path, data_only=False, read_only=not include_details)
     try:
         target = _build_target(wb, range_token)
         sheet = target.sheet
@@ -1501,7 +1344,7 @@ def _inspect_range_sync(
         truncated = cell_count > max_cells
         ws_values = None
         try:
-            cell_records: list[dict[str, Any]] = []
+            cells: list[dict[str, Any]] = []
             if not truncated:
                 for r_idx, row in enumerate(
                     ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col),
@@ -1514,7 +1357,7 @@ def _inspect_range_sync(
                         formula = None
                         if is_formula:
                             raw = getattr(cell, "value", None)
-                            if include_formula and isinstance(raw, str) and raw:
+                            if isinstance(raw, str) and raw:
                                 formula = raw if raw.startswith("=") else f"={raw}"
                                 formula = _truncate_str(formula, _get_max_string_chars())
                         if ws_values is None and is_formula:
@@ -1538,19 +1381,16 @@ def _inspect_range_sync(
 
                         entry: dict[str, Any] = {
                             "address": _format_a1_address(sheet_name=sheet, row=row_num, col=col_num),
-                            "row": row_num,
-                            "col": col_num,
                             "value": _to_jsonable_excel_value(val),
+                            "formula": formula,
                         }
-                        if include_formula:
-                            entry["formula"] = formula
                         if include_details:
                             try:
                                 entry["number_format"] = getattr(cell, "number_format", None)
                             except Exception:
                                 entry["number_format"] = None
                             entry["style"] = _style_to_json(cell)
-                        cell_records.append(entry)
+                        cells.append(entry)
             else:
                 sample_indices = _sample_linear_indices(cell_count, head=5, tail=5)
                 for idx in sample_indices:
@@ -1566,7 +1406,7 @@ def _inspect_range_sync(
                     formula = None
                     if is_formula:
                         raw = getattr(cell, "value", None)
-                        if include_formula and isinstance(raw, str) and raw:
+                        if isinstance(raw, str) and raw:
                             formula = raw if raw.startswith("=") else f"={raw}"
                             formula = _truncate_str(formula, _get_max_string_chars())
                     if ws_values is None and is_formula:
@@ -1590,23 +1430,20 @@ def _inspect_range_sync(
 
                     entry = {
                         "address": _format_a1_address(sheet_name=sheet, row=row_num, col=col_num),
-                        "row": row_num,
-                        "col": col_num,
                         "value": _to_jsonable_excel_value(val),
+                        "formula": formula,
                     }
-                    if include_formula:
-                        entry["formula"] = formula
                     if include_details and cell is not None:
                         try:
                             entry["number_format"] = getattr(cell, "number_format", None)
                         except Exception:
                             entry["number_format"] = None
                         entry["style"] = _style_to_json(cell)
-                    cell_records.append(entry)
+                    cells.append(entry)
 
             payload: dict[str, Any] = {
                 "status": "success",
-                "file": str(file_path),
+                "file": display_file or str(file_path),
                 "sheet": sheet,
                 "range": f"{_quote_sheet_name_for_a1(sheet)}!{cell_range}",
                 "shape": {
@@ -1619,14 +1456,8 @@ def _inspect_range_sync(
                     "max_row": max_row,
                 },
                 "truncated": truncated,
+                "cells": cells,
             }
-            _set_payload_csv_data(
-                payload,
-                cell_records,
-                preview=preview,
-                include_formula=include_formula,
-                truncated=truncated,
-            )
 
             if include_details and not truncated:
                 merged_ranges = _extract_merged_ranges(ws, requested_boundaries=target.boundaries)
@@ -1645,42 +1476,46 @@ def _inspect_range_sync(
                     requested_boundaries=target.boundaries,
                     max_rules=max_cf_rules,
                 )
-                details: dict[str, Any] = {
-                    "cell_metadata_csv": _records_to_cell_metadata_csv(cell_records),
-                }
-                if merged_ranges:
-                    details["merged_ranges"] = merged_ranges
-                if hidden.get("rows") or hidden.get("columns"):
-                    details["hidden"] = hidden
-                if tables:
-                    details["tables"] = tables
-                if named_ranges:
-                    details["named_ranges"] = named_ranges
-                if auto_filter:
-                    details["auto_filter"] = auto_filter
-                if data_validations:
-                    details["data_validations"] = data_validations
-                if conditional_formatting:
-                    details["conditional_formatting"] = conditional_formatting
-                payload["details"] = details
+                for key, value in (
+                    ("merged_ranges", merged_ranges),
+                    ("hidden", hidden),
+                    ("tables", tables),
+                    ("named_ranges", named_ranges),
+                    ("auto_filter", auto_filter),
+                    ("data_validations", data_validations),
+                    ("conditional_formatting", conditional_formatting),
+                ):
+                    if _has_detail_payload(value):
+                        payload[key] = value
 
             metrics = {
                 "status": "success",
-                "file": str(file_path),
+                "file": display_file or str(file_path),
                 "sheet": sheet,
                 "requested_cells": cell_count,
-                "returned_cells": len(cell_records),
+                "returned_cells": len(cells),
                 "truncated": truncated,
                 "include_details": include_details,
-                "include_formula": include_formula,
-                "preview": preview,
             }
             text = _json_dumps_compact(payload)
             if len(text) <= max_response_chars:
                 return payload, metrics
 
-            if "details" in payload:
-                payload.pop("details", None)
+            metadata_keys = (
+                "merged_ranges",
+                "hidden",
+                "tables",
+                "named_ranges",
+                "auto_filter",
+                "data_validations",
+                "conditional_formatting",
+            )
+            removed_any = False
+            for key in metadata_keys:
+                if key in payload:
+                    removed_any = True
+                payload.pop(key, None)
+            if removed_any:
                 payload["truncated"] = True
                 metrics["truncated"] = True
 
@@ -1688,36 +1523,62 @@ def _inspect_range_sync(
             if len(text) <= max_response_chars:
                 return payload, metrics
 
-            if not cell_records:
+            original_cells = payload.get("cells")
+            if not isinstance(original_cells, list) or not original_cells:
                 return payload, metrics
 
             for head, tail in ((5, 5), (3, 3), (2, 2), (1, 1)):
-                if len(cell_records) <= head + tail:
-                    candidate_records = cell_records
+                if len(original_cells) <= head + tail:
+                    candidate_cells = original_cells
                 else:
-                    candidate_records = cell_records[:head] + cell_records[-tail:]
-                _set_payload_csv_data(
-                    payload,
-                    candidate_records,
-                    preview=preview,
-                    include_formula=include_formula,
-                    truncated=True,
-                )
+                    candidate_cells = original_cells[:head] + original_cells[-tail:]
+                payload["cells"] = candidate_cells
                 payload["truncated"] = True
                 metrics["truncated"] = True
-                metrics["returned_cells"] = len(candidate_records)
+                metrics["returned_cells"] = len(candidate_cells)
                 text = _json_dumps_compact(payload)
                 if len(text) <= max_response_chars:
                     return payload, metrics
 
-            _set_payload_csv_data(
-                payload,
-                cell_records[:1],
-                preview=preview,
-                include_formula=include_formula,
-                truncated=True,
-            )
-            metrics["returned_cells"] = len(cell_records[:1])
+            trimmed_cells = payload.get("cells")
+            if isinstance(trimmed_cells, list):
+                for cell in trimmed_cells:
+                    if not isinstance(cell, dict):
+                        continue
+                    cell.pop("style", None)
+                    cell.pop("number_format", None)
+            text = _json_dumps_compact(payload)
+            if len(text) <= max_response_chars:
+                return payload, metrics
+
+            payload["cells"] = payload["cells"][:1]
+            payload["truncated"] = True
+            metrics["truncated"] = True
+            metrics["returned_cells"] = len(payload["cells"])
+            text = _json_dumps_compact(payload)
+            if len(text) <= max_response_chars:
+                return payload, metrics
+
+            payload["cells"] = []
+            metrics["returned_cells"] = 0
+            text = _json_dumps_compact(payload)
+            if len(text) <= max_response_chars:
+                return payload, metrics
+
+            minimal_payload = {
+                "status": "success",
+                "truncated": True,
+                "returned_cells": 0,
+            }
+            for key in ("file", "sheet", "range", "shape"):
+                value = payload.get(key)
+                if value is None:
+                    continue
+                candidate = {**minimal_payload, key: value}
+                if len(_json_dumps_compact(candidate)) <= max_response_chars:
+                    minimal_payload = candidate
+            payload.clear()
+            payload.update(minimal_payload)
             return payload, metrics
         finally:
             if shared_state is None and wb_values is not None:
@@ -1736,15 +1597,14 @@ def _inspect_range_sync(
 def _inspect_ranges_sync(
     *,
     file_path: Path,
+    display_file: str | None = None,
     range_tokens: list[str],
     max_cells: int,
     max_cf_rules: int,
     include_details: bool,
-    include_formula: bool,
-    preview: bool,
     max_response_chars: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    wb = _load_workbook(file_path, data_only=not include_formula, read_only=not include_details)
+    wb = _load_workbook(file_path, data_only=False, read_only=not include_details)
     shared_state: dict[str, Any] = {}
     try:
         range_payloads = []
@@ -1752,12 +1612,11 @@ def _inspect_ranges_sync(
         for token in range_tokens:
             item_payload, item_metrics = _inspect_range_sync(
                 file_path=file_path,
+                display_file=display_file,
                 range_token=token,
                 max_cells=max_cells,
                 max_cf_rules=max_cf_rules,
                 include_details=include_details,
-                include_formula=include_formula,
-                preview=preview,
                 max_response_chars=max_response_chars,
                 wb=wb,
                 shared_state=shared_state,
@@ -1787,8 +1646,7 @@ def _trim_multi_range_payload(
     if len(_json_dumps_compact(payload)) <= max_response_chars:
         return
 
-    metadata_keys = {
-        "details",
+    metadata_keys = (
         "merged_ranges",
         "hidden",
         "tables",
@@ -1796,7 +1654,7 @@ def _trim_multi_range_payload(
         "auto_filter",
         "data_validations",
         "conditional_formatting",
-    }
+    )
     for item in payload.get("ranges", []):
         if not isinstance(item, dict):
             continue
@@ -1808,12 +1666,21 @@ def _trim_multi_range_payload(
     if len(_json_dumps_compact(payload)) <= max_response_chars:
         return
 
-    for per_range_rows in (6, 4, 2, 1, 0):
+    for per_range_cells in (6, 4, 2, 1, 0):
         returned_cells = 0
         for item in payload.get("ranges", []):
             if not isinstance(item, dict):
                 continue
-            returned_cells += _trim_csv_data_for_payload(item, max_data_rows=per_range_rows)
+            cells = item.get("cells")
+            if not isinstance(cells, list):
+                continue
+            if per_range_cells <= 0:
+                item["cells"] = []
+            elif len(cells) > per_range_cells:
+                head = per_range_cells // 2
+                tail = per_range_cells - head
+                item["cells"] = cells[:head] + cells[-tail:]
+            returned_cells += len(item.get("cells") or [])
             item["truncated"] = True
         payload["returned_cells"] = returned_cells
         metrics["returned_cells"] = returned_cells
@@ -1877,6 +1744,53 @@ def _trim_multi_range_payload(
         minimal_with_file = {**minimal_payload, "file": file_value}
         if len(_json_dumps_compact(minimal_with_file)) <= max_response_chars:
             minimal_payload = minimal_with_file
+    payload.clear()
+    payload.update(minimal_payload)
+
+
+def _trim_single_range_payload(
+    payload: dict[str, Any],
+    metrics: dict[str, Any],
+    *,
+    max_response_chars: int,
+) -> None:
+    if len(_json_dumps_compact(payload)) <= max_response_chars:
+        return
+
+    payload["truncated"] = True
+    metrics["truncated"] = True
+    file_value = payload.pop("file", None)
+    if len(_json_dumps_compact(payload)) <= max_response_chars:
+        return
+
+    if file_value is not None:
+        payload["file"] = file_value
+    cells = payload.get("cells")
+    if isinstance(cells, list) and cells:
+        payload["cells"] = []
+        metrics["returned_cells"] = 0
+        payload["returned_cells"] = 0
+        if len(_json_dumps_compact(payload)) <= max_response_chars:
+            return
+
+    if file_value is not None:
+        payload.pop("file", None)
+        if len(_json_dumps_compact(payload)) <= max_response_chars:
+            return
+
+    minimal_payload = {
+        "status": "success",
+        "truncated": True,
+        "returned_cells": 0,
+    }
+    for key in ("file", "sheet", "range", "shape"):
+        value = file_value if key == "file" else payload.get(key)
+        if value is None:
+            continue
+        candidate = {**minimal_payload, key: value}
+        if len(_json_dumps_compact(candidate)) <= max_response_chars:
+            minimal_payload = candidate
+    metrics["returned_cells"] = 0
     payload.clear()
     payload.update(minimal_payload)
 
@@ -1969,7 +1883,14 @@ class InspectRangeTool(BaseTool):
         range_token_raw = parameters.get("range")
         ranges_raw = parameters.get("ranges")
         if range_token_raw is not None and ranges_raw is not None:
-            return _error_response("invalid_range", "use either 'range' or 'ranges', not both.")
+            return (
+                ToolResponse(text="Error: use either 'range' or 'ranges', not both."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_range",
+                },
+            )
         range_token_count = 0
         try:
             if isinstance(range_token_raw, str) and range_token_raw.strip():
@@ -1980,13 +1901,34 @@ class InspectRangeTool(BaseTool):
                     if range_token_count > self.max_ranges:
                         raise _TooManyRangesError
             elif range_token_raw is not None and not (isinstance(range_token_raw, str) and not range_token_raw.strip()):
-                return _error_response("invalid_range", "'range' must be a non-empty string when provided.")
+                return (
+                    ToolResponse(text="Error: 'range' must be a non-empty string when provided."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_range",
+                    },
+                )
             if ranges_raw is not None:
                 if not isinstance(ranges_raw, list):
-                    return _error_response("invalid_range", "'ranges' must be a list of A1 range strings.")
+                    return (
+                        ToolResponse(text="Error: 'ranges' must be a list of A1 range strings."),
+                        0.0,
+                        {
+                            "status": "error",
+                            "error": "invalid_range",
+                        },
+                    )
                 for idx, item in enumerate(ranges_raw):
                     if not isinstance(item, str) or not item.strip():
-                        return _error_response("invalid_range", f"'ranges[{idx}]' must be a non-empty string.")
+                        return (
+                            ToolResponse(text=f"Error: 'ranges[{idx}]' must be a non-empty string."),
+                            0.0,
+                            {
+                                "status": "error",
+                                "error": "invalid_range",
+                            },
+                        )
                     group = _split_disjoint_range_group(item.strip())
                     requested_range_groups.append(group)
                     if not _range_groups_may_need_unquoted_comma_merge([group]):
@@ -1994,35 +1936,69 @@ class InspectRangeTool(BaseTool):
                         if range_token_count > self.max_ranges:
                             raise _TooManyRangesError
         except _TooManyRangesError:
-            return _error_response("invalid_range", f"too many ranges requested (maximum is {self.max_ranges}).")
+            return (
+                ToolResponse(text=f"Error: too many ranges requested (maximum is {self.max_ranges})."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_range",
+                },
+            )
         except ValueError as exc:
-            return _error_response("invalid_range", str(exc))
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_range"}
         if not any(requested_range_groups):
-            return _error_response("invalid_range", "missing/invalid 'range' or 'ranges' (A1 notation).")
+            return (
+                ToolResponse(text="Error: missing/invalid 'range' or 'ranges' (A1 notation)."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_range",
+                },
+            )
         sheet_name_raw = parameters.get("sheet_name")
         sheet_name: Optional[str] = None
         if sheet_name_raw is not None:
             if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-                return _error_response("invalid_sheet_name", "sheet_name must be a non-empty string.")
+                return (
+                    ToolResponse(text="Error: sheet_name must be a non-empty string."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             sheet_name = _normalize_sheet_name(sheet_name_raw)
             if not sheet_name:
-                return _error_response("invalid_sheet_name", "sheet_name is empty after normalization.")
+                return (
+                    ToolResponse(text="Error: sheet_name is empty after normalization."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
         include_details_raw = parameters.get("include_details", False)
         if not isinstance(include_details_raw, bool):
-            return _error_response("invalid_include_details", "include_details must be a boolean.")
+            return (
+                ToolResponse(text="Error: include_details must be a boolean."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_include_details",
+                },
+            )
         include_details = bool(include_details_raw)
-        include_formula_raw = parameters.get("include_formula", False)
-        if not isinstance(include_formula_raw, bool):
-            return _error_response("invalid_include_formula", "include_formula must be a boolean.")
-        include_formula = bool(include_formula_raw)
-        preview_raw = parameters.get("preview", False)
-        if not isinstance(preview_raw, bool):
-            return _error_response("invalid_preview", "preview must be a boolean.")
-        preview = bool(preview_raw)
         try:
             from openpyxl.utils.cell import range_boundaries
         except ImportError:
-            return _error_response("missing_dependency", "openpyxl is required; install openpyxl==3.1.5.")
+            return (
+                ToolResponse(text="Error: openpyxl is required; install openpyxl==3.1.5."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_dependency",
+                },
+            )
 
         range_tokens: list[str] = []
         needs_workbook_range_validation = _range_groups_may_need_unquoted_comma_merge(requested_range_groups)
@@ -2036,19 +2012,33 @@ class InspectRangeTool(BaseTool):
             if _range_groups_may_need_unquoted_comma_merge(requested_range_groups):
                 needs_workbook_range_validation = True
             else:
-                return _error_response("sheet_mismatch", str(exc))
+                return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "sheet_mismatch"}
         except Exception as exc:
             if _range_groups_may_need_unquoted_comma_merge(requested_range_groups):
                 needs_workbook_range_validation = True
             else:
-                return _error_response("invalid_range", str(exc))
+                return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_range"}
 
         if not needs_workbook_range_validation and len(range_tokens) > self.max_ranges:
-            return _error_response("invalid_range", f"too many ranges requested (maximum is {self.max_ranges}).")
+            return (
+                ToolResponse(text=f"Error: too many ranges requested (maximum is {self.max_ranges})."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_range",
+                },
+            )
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return _error_response("missing_workspace_id", "workspace_id is missing/invalid.")
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
 
         path_raw = parameters.get("path")
         if path_raw is None or (isinstance(path_raw, str) and not path_raw.strip()):
@@ -2056,9 +2046,16 @@ class InspectRangeTool(BaseTool):
         else:
             relpath = _sanitize_relpath(path_raw)
             if relpath is None:
-                return _error_response("invalid_path", "invalid 'path'.")
+                return ToolResponse(text="Error: invalid 'path'."), 0.0, {"status": "error", "error": "invalid_path"}
         if relpath.suffix.lower() != ".xlsx":
-            return _error_response("invalid_path", "only .xlsx workbooks are supported.")
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         file_path, attempted = _resolve_workbook_path(
             workspace_id=workspace_id,
@@ -2075,15 +2072,16 @@ class InspectRangeTool(BaseTool):
                 except Exception:
                     attempted_display.append(str(p))
             attempted_text = "\n".join(attempted_display[:12])
-            message = (
-                "workbook not found. Save the workbook as data.xlsx in the workspace root, "
-                "or pass 'path' explicitly."
-            )
-            return _error_response(
-                "workbook_not_found",
-                message,
-                attempted=attempted_display[:12],
-                attempted_text=attempted_text,
+            return (
+                ToolResponse(
+                    text=(
+                        "Error: workbook not found.\n"
+                        f"Tried:\n{attempted_text}\n"
+                        "Save the workbook as data.xlsx in the workspace root, or pass 'path' explicitly."
+                    )
+                ),
+                0.0,
+                {"status": "error", "error": "workbook_not_found"},
             )
 
         try:
@@ -2093,12 +2091,17 @@ class InspectRangeTool(BaseTool):
                 except OSError:
                     file_size = None
                 if file_size is not None and file_size > self.max_file_mb * 1024 * 1024:
-                    return _error_response(
-                        "file_too_large",
-                        "workbook too large to inspect.",
-                        file=str(relpath),
-                        size_bytes=int(file_size),
-                        max_file_mb=self.max_file_mb,
+                    return (
+                        ToolResponse(
+                            text=(
+                                "Error: workbook too large to inspect.\n"
+                                f"file: {relpath}\n"
+                                f"size_bytes: {file_size}\n"
+                                f"max_file_mb: {self.max_file_mb}"
+                            )
+                        ),
+                        0.0,
+                        {"status": "error", "error": "file_too_large", "size_bytes": int(file_size)},
                     )
 
             zip_error = await asyncio.to_thread(
@@ -2110,11 +2113,12 @@ class InspectRangeTool(BaseTool):
                 max_ratio=200.0,
             )
             if zip_error:
-                return _error_response(
-                    "zip_limits_exceeded",
-                    f"workbook rejected by zip safety checks: {zip_error}",
-                    file=str(relpath),
-                    detail=zip_error,
+                return (
+                    ToolResponse(
+                        text=(f"Error: workbook rejected by zip safety checks.\nfile: {relpath}\ndetail: {zip_error}")
+                    ),
+                    0.0,
+                    {"status": "error", "error": "zip_limits_exceeded"},
                 )
 
             if needs_workbook_range_validation:
@@ -2127,41 +2131,55 @@ class InspectRangeTool(BaseTool):
                         range_boundaries=range_boundaries,
                     )
                 except _SheetMismatchError as exc:
-                    return _error_response("sheet_mismatch", str(exc))
+                    return (
+                        ToolResponse(text=f"Error: {exc}"),
+                        0.0,
+                        {
+                            "status": "error",
+                            "error": "sheet_mismatch",
+                        },
+                    )
                 except Exception as exc:
-                    return _error_response("invalid_range", str(exc))
+                    return (
+                        ToolResponse(text=f"Error: {exc}"),
+                        0.0,
+                        {
+                            "status": "error",
+                            "error": "invalid_range",
+                        },
+                    )
                 if len(range_tokens) > self.max_ranges:
-                    return _error_response(
-                        "invalid_range",
-                        f"too many ranges requested (maximum is {self.max_ranges}).",
+                    return (
+                        ToolResponse(text=f"Error: too many ranges requested (maximum is {self.max_ranges})."),
+                        0.0,
+                        {
+                            "status": "error",
+                            "error": "invalid_range",
+                        },
                     )
 
             if len(range_tokens) == 1:
                 payload, metrics = await asyncio.to_thread(
                     _inspect_range_sync,
                     file_path=file_path,
+                    display_file=str(relpath),
                     range_token=range_tokens[0],
                     max_cells=self.max_cells,
                     max_cf_rules=self.max_cf_rules,
                     include_details=include_details,
-                    include_formula=include_formula,
-                    preview=preview,
                     max_response_chars=self.max_response_chars,
                 )
             else:
                 range_payloads, range_metrics = await asyncio.to_thread(
                     _inspect_ranges_sync,
                     file_path=file_path,
+                    display_file=str(relpath),
                     range_tokens=range_tokens,
                     max_cells=self.max_cells,
                     max_cf_rules=self.max_cf_rules,
                     include_details=include_details,
-                    include_formula=include_formula,
-                    preview=preview,
                     max_response_chars=self.max_response_chars,
                 )
-                for item_payload in range_payloads:
-                    item_payload["file"] = str(relpath)
                 if len(range_payloads) == 1:
                     payload = range_payloads[0]
                     metrics = range_metrics[0]
@@ -2172,7 +2190,11 @@ class InspectRangeTool(BaseTool):
                         "range_count": len(range_payloads),
                         "total_cells": int(sum(item.get("shape", {}).get("cells", 0) for item in range_payloads)),
                         "returned_cells": int(
-                            sum(item.get("returned_cells", 0) for item in range_payloads)
+                            sum(
+                                len(item.get("cells", []))
+                                for item in range_payloads
+                                if isinstance(item.get("cells"), list)
+                            )
                         ),
                         "truncated": any(bool(item.get("truncated")) for item in range_payloads),
                         "ranges": range_payloads,
@@ -2185,18 +2207,16 @@ class InspectRangeTool(BaseTool):
                         "returned_cells": int(sum(item.get("returned_cells", 0) for item in range_metrics)),
                         "truncated": any(bool(item.get("truncated")) for item in range_metrics),
                         "include_details": include_details,
-                        "include_formula": include_formula,
-                        "preview": preview,
                     }
                     _trim_multi_range_payload(payload, metrics, max_response_chars=self.max_response_chars)
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return _error_response("inspect_failed", str(exc))
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "inspect_failed"}
 
         if int(metrics.get("range_count", 1) or 1) <= 1:
-            payload["file"] = str(relpath)
             metrics["file"] = str(relpath)
+            _trim_single_range_payload(payload, metrics, max_response_chars=self.max_response_chars)
         return ToolResponse(text=_json_dumps_compact(payload)), 0.0, metrics
 
     async def calc_reward(self, instance_id: str, **kwargs) -> float:

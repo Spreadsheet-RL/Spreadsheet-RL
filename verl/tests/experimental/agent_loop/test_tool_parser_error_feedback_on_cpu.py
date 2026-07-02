@@ -11,18 +11,89 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+import asyncio
+import importlib.util
 import json
+import sys
+import types
 from pathlib import Path
 
 import pytest
 from omegaconf import OmegaConf
 
-from verl.experimental.agent_loop.tool_parser import (
+
+def _load_parser_modules():
+    sentinel = object()
+    module_names = (
+        "verl",
+        "verl.experimental",
+        "verl.experimental.agent_loop",
+        "verl.experimental.agent_loop.tool_parser",
+        "verl.tools",
+        "verl.tools.schemas",
+        "verl.utils",
+        "verl.utils.ray_utils",
+        "verl.utils.rollout_trace",
+    )
+    original_modules = {name: sys.modules.get(name, sentinel) for name in module_names}
+    module_defs = {
+        "verl": types.ModuleType("verl"),
+        "verl.experimental": types.ModuleType("verl.experimental"),
+        "verl.experimental.agent_loop": types.ModuleType("verl.experimental.agent_loop"),
+        "verl.tools": types.ModuleType("verl.tools"),
+        "verl.utils": types.ModuleType("verl.utils"),
+        "verl.utils.ray_utils": types.ModuleType("verl.utils.ray_utils"),
+        "verl.utils.rollout_trace": types.ModuleType("verl.utils.rollout_trace"),
+    }
+    module_defs["verl"].__path__ = []
+    module_defs["verl.experimental"].__path__ = []
+    module_defs["verl.experimental.agent_loop"].__path__ = []
+    module_defs["verl.tools"].__path__ = []
+    module_defs["verl.utils"].__path__ = []
+    module_defs["verl.utils.ray_utils"].get_event_loop = asyncio.get_event_loop
+    module_defs["verl.utils.rollout_trace"].rollout_trace_op = lambda fn: fn
+    for name, module in module_defs.items():
+        sys.modules[name] = module
+
+    try:
+        repo_root = Path(__file__).parents[3]
+        loaded = {}
+        for name, path in (
+            ("verl.tools.schemas", repo_root / "verl" / "tools" / "schemas.py"),
+            (
+                "verl.experimental.agent_loop.tool_parser",
+                repo_root / "verl" / "experimental" / "agent_loop" / "tool_parser.py",
+            ),
+        ):
+            spec = importlib.util.spec_from_file_location(name, path)
+            module = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            sys.modules[name] = module
+            spec.loader.exec_module(module)
+            loaded[name] = module
+
+        schemas = loaded["verl.tools.schemas"]
+        parser = loaded["verl.experimental.agent_loop.tool_parser"]
+        return (
+            parser.TOOL_PARSER_ERROR_FUNCTION_NAME,
+            parser.HermesToolParser,
+            parser.Qwen3XMLToolParser,
+            schemas.OpenAIFunctionToolSchema,
+        )
+    finally:
+        for name, original in original_modules.items():
+            if original is sentinel:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = original
+
+
+(
     TOOL_PARSER_ERROR_FUNCTION_NAME,
     HermesToolParser,
     Qwen3XMLToolParser,
-)
-from verl.tools.schemas import OpenAIFunctionToolSchema
+    OpenAIFunctionToolSchema,
+) = _load_parser_modules()
 
 
 class DummyTokenizer:
@@ -55,7 +126,14 @@ def _tool_schema(name: str = "code_interpreter") -> OpenAIFunctionToolSchema:
 
 
 def _spreadsheet_tool_schemas() -> list[OpenAIFunctionToolSchema]:
-    config_path = Path(__file__).parents[3] / "configs/tool/spreadsheet_tools.yaml"
+    config_path = next(
+        path
+        for path in (
+            Path(__file__).parents[3] / "configs/tool/spreadsheet_tools.yaml",
+            Path(__file__).parents[4] / "configs/tool/spreadsheet_tools.yaml",
+        )
+        if path.is_file()
+    )
     config = OmegaConf.load(config_path)
     return [
         OpenAIFunctionToolSchema.model_validate(OmegaConf.to_container(tool.tool_schema, resolve=True))
@@ -189,9 +267,7 @@ async def test_qwen3_coder_array_parser_does_not_eval(tmp_path):
     _, tool_calls = await parser.extract_tool_calls([], [schema])
 
     assert len(tool_calls) == 1
-    assert json.loads(tool_calls[0].arguments) == {
-        "items": f'__import__("pathlib").Path("{target}").touch()'
-    }
+    assert json.loads(tool_calls[0].arguments) == {"items": f'__import__("pathlib").Path("{target}").touch()'}
     assert not target.exists()
 
 
@@ -258,6 +334,58 @@ async def test_qwen3_coder_spreadsheet_xml_arguments_keep_types():
         "case_sensitive": False,
         "max_results": 10,
         "return": "all",
+    }
+
+
+@pytest.mark.asyncio
+async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_sheet_name():
+    parser = Qwen3XMLToolParser(
+        DummyTokenizer(
+            """
+<tool_call>
+<function=inspect_range>
+<parameter=range>A1:B2</parameter>
+<parameter=sheet_name>Sheet1</parameter>
+<parameter=include_details>true</parameter>
+</function>
+</tool_call>
+"""
+        )
+    )
+
+    _, tool_calls = await parser.extract_tool_calls([], _spreadsheet_tool_schemas())
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0].name == "inspect_range"
+    assert json.loads(tool_calls[0].arguments) == {
+        "range": "A1:B2",
+        "sheet_name": "Sheet1",
+        "include_details": True,
+    }
+
+
+@pytest.mark.asyncio
+async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_ranges_array():
+    parser = Qwen3XMLToolParser(
+        DummyTokenizer(
+            """
+<tool_call>
+<function=inspect_range>
+<parameter=ranges>["A1:B2", "J1:J2"]</parameter>
+<parameter=sheet_name>Sheet1</parameter>
+</function>
+</tool_call>
+"""
+        )
+    )
+
+    _, tool_calls = await parser.extract_tool_calls([], _spreadsheet_tool_schemas())
+
+    assert len(tool_calls) == 1
+    assert tool_calls[0].name == "inspect_range"
+    assert json.loads(tool_calls[0].arguments) == {
+        "ranges": ["A1:B2", "J1:J2"],
+        "sheet_name": "Sheet1",
     }
 
 

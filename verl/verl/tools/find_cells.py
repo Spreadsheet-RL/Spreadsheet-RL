@@ -1,3 +1,16 @@
+# Copyright 2026 Bytedance Ltd. and/or its affiliates
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
 from __future__ import annotations
 
 import asyncio
@@ -73,10 +86,14 @@ def _error_payload(error: str, message: str) -> dict[str, Any]:
 
 def _error_tool_response(error: str, message: str) -> tuple[ToolResponse, float, dict]:
     payload = _error_payload(error, message)
-    return ToolResponse(text=_json_dumps_compact(payload)), 0.0, {
-        "status": "error",
-        "error": error,
-    }
+    return (
+        ToolResponse(text=_json_dumps_compact(payload)),
+        0.0,
+        {
+            "status": "error",
+            "error": error,
+        },
+    )
 
 
 def _truncate_str(value: str, max_chars: int) -> str:
@@ -215,13 +232,13 @@ def _format_a1_address(*, sheet_name: str, row: int, col: int) -> str:
 def _to_jsonable_excel_value(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, (bool, int, str)):
+    if isinstance(value, bool | int | str):
         if isinstance(value, str):
             return _truncate_str(value, _get_max_string_chars())
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
-    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+    if isinstance(value, dt.datetime | dt.date | dt.time):
         return value.isoformat()
     if isinstance(value, dt.timedelta):
         return value.total_seconds()
@@ -1229,12 +1246,14 @@ def _find_cells_all_sheets_sync(
             sheet_matches = 0
 
             if candidate_cell_count <= 0:
-                sheet_summaries.append({
-                    "sheet": actual_sheet,
-                    "range": range_label,
-                    "scanned_cells": 0,
-                    "matches": 0,
-                })
+                sheet_summaries.append(
+                    {
+                        "sheet": actual_sheet,
+                        "range": range_label,
+                        "scanned_cells": 0,
+                        "matches": 0,
+                    }
+                )
                 continue
 
             ws_values = _resolve_target_worksheet(wb_values, actual_sheet) if wb_values is not None else None
@@ -1335,12 +1354,14 @@ def _find_cells_all_sheets_sync(
                 if scan_truncated or stopped_after_first:
                     break
 
-            sheet_summaries.append({
-                "sheet": actual_sheet,
-                "range": range_label,
-                "scanned_cells": sheet_scanned,
-                "matches": sheet_matches,
-            })
+            sheet_summaries.append(
+                {
+                    "sheet": actual_sheet,
+                    "range": range_label,
+                    "scanned_cells": sheet_scanned,
+                    "matches": sheet_matches,
+                }
+            )
             if scan_truncated or stopped_after_first:
                 break
 

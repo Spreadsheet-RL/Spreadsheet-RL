@@ -11,7 +11,7 @@ tools:
       type: "function"
       function:
         name: "inspect_range"
-        description: "Inspect one or more A1 ranges in a workbook. By default returns addressed_grid_csv, where each CSV field is address:value and rows preserve worksheet layout. Set preview=true for compact preview_csv. Can optionally include formulas, formatting, and sheet metadata."
+        description: "Inspect one or more A1 ranges in a workbook. Returns per-cell address/value/formula; can optionally include formatting and sheet metadata."
         parameters:
           type: "object"
           properties:
@@ -32,12 +32,6 @@ tools:
             include_details:
               type: "boolean"
               description: "If true, include formatting and overlapping sheet metadata (merged cells, conditional formatting, validations, etc.). Default false."
-            include_formula:
-              type: "boolean"
-              description: "If true, include each cell's raw Excel formula when present. Default false."
-            preview:
-              type: "boolean"
-              description: "If true, return compact preview_csv. If false, return addressed_grid_csv. Default false. When include_formula=true, formula_data contains a parallel addressed formula grid."
           required: []
 
   - class_name: "verl.tools.list_sheets.ListSheetsTool"
@@ -104,90 +98,6 @@ tools:
               type: "string"
               description: "Optional A1 range to restrict the search (e.g. A1:Z200 or Sheet1!A1:Z200). Defaults to the used range of each searched sheet."
           required: ["query"]
-
-  - class_name: "verl.tools.write_range.WriteRangeTool"
-    config:
-      type: native
-      max_file_size_mb: 100
-      lock_timeout_s: 30
-      max_write_cells: 50000
-      max_formula_chars: 8192
-      max_response_chars: 4096
-
-    tool_schema:
-      type: "function"
-      function:
-        name: "write_range"
-        description: "Write a rectangular grid of static values and/or formulas. Prefer fill_formula for repeated formulas over a contiguous range. Does not recalculate formulas; call recalculate_and_read afterward when calculated values matter."
-        parameters:
-          type: "object"
-          properties:
-            path:
-              type: "string"
-              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
-            sheet_name:
-              type: "string"
-              description: "Optional worksheet name. If range or start_cell includes a sheet name, it must match sheet_name."
-            range:
-              type: "string"
-              description: "Target A1 range (e.g. A1:C3 or Sheet1!B2:D10). Its size must match the rectangular values/formulas grid."
-            start_cell:
-              type: "string"
-              description: "Alternative to range: top-left target cell (e.g. A1 or Sheet1!B2). The target size is inferred from the values/formulas grid."
-            values:
-              type: "array"
-              description: "Rectangular 2D array of static JSON scalar values. Strings beginning with = are written as text; use formulas for formulas."
-              items:
-                type: "array"
-                items:
-                  type: ["string", "number", "boolean", "null"]
-            formulas:
-              type: "array"
-              description: "Rectangular 2D array of formula strings. Use null only for cells written from values instead."
-              items:
-                type: "array"
-                items:
-                  type: ["string", "null"]
-            allow_overwrite:
-              type: "boolean"
-              description: "If false, reject writes that would replace an existing non-empty cell. Default true."
-          required: []
-
-  - class_name: "verl.tools.copy_range.CopyRangeTool"
-    config:
-      type: native
-      max_file_size_mb: 100
-      lock_timeout_s: 30
-      max_copy_cells: 300000
-      max_response_chars: 4096
-
-    tool_schema:
-      type: "function"
-      function:
-        name: "copy_range"
-        description: "Copy a finite rectangular cell range, including values/formulas, styles, comments, and hyperlinks. Destination may be a top-left cell, a same-sized range, or a larger range when source_range is one cell. Does not recalculate formulas."
-        parameters:
-          type: "object"
-          properties:
-            path:
-              type: "string"
-              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
-            sheet_name:
-              type: "string"
-              description: "Optional worksheet name used for both source and destination when they do not include sheet names."
-            source_sheet_name:
-              type: "string"
-              description: "Optional source worksheet name. A sheet name embedded in source_range must match this value."
-            destination_sheet_name:
-              type: "string"
-              description: "Optional destination worksheet name. A sheet name embedded in destination_range must match this value."
-            source_range:
-              type: "string"
-              description: "Finite source A1 range, e.g. A1:C3 or Sheet1!B2:D10."
-            destination_range:
-              type: "string"
-              description: "Destination top-left cell, same-sized finite A1 range, or larger fill range for one-cell source, e.g. E1 or Sheet2!E1:G3."
-          required: ["source_range", "destination_range"]
 
   - class_name: "verl.tools.format_range.FormatRangeTool"
     config:
