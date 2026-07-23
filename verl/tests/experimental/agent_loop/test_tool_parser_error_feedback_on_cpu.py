@@ -149,6 +149,120 @@ def _assert_parser_error(tool_calls, expected_text: str):
     assert expected_text in payload["message"]
 
 
+def test_spreadsheet_tool_schema_preserves_items_unions_and_enums():
+    schemas = {schema.function.name: schema for schema in _spreadsheet_tool_schemas()}
+    serialized = {name: schema.model_dump(exclude_unset=True, exclude_none=True) for name, schema in schemas.items()}
+
+    inspect_parameters = schemas["inspect_range"].function.parameters
+    delete_rows = schemas["delete_rows"].function.parameters.properties["rows"]
+    recalc_ranges = schemas["recalculate_and_read"].function.parameters.properties["cell_ranges"]
+    write_data = schemas["write_range"].function.parameters.properties["data"]
+
+    assert inspect_parameters.required == ["range"]
+    assert "ranges" not in inspect_parameters.properties
+    assert delete_rows.items is not None and delete_rows.items.type == "string"
+    assert recalc_ranges.items is not None and recalc_ranges.items.type == "string"
+    assert write_data.type == ["array", "string", "number", "boolean"]
+    format_properties = schemas["format_range"].function.parameters.properties
+    assert "shrink_to_fit" in format_properties
+    assert "alignment" not in format_properties
+    assert "background_color" not in format_properties
+    assert format_properties["horizontal_alignment"].enum == [
+        "general",
+        "left",
+        "center",
+        "right",
+        "fill",
+        "justify",
+        "centerContinuous",
+        "distributed",
+    ]
+    workbook_schemas = {name: schema for name, schema in schemas.items() if name != "code_interpreter"}
+    assert len(workbook_schemas) == 11
+    assert all(schema.function.parameters.properties["path"].type == "string" for schema in workbook_schemas.values())
+    assert "path" not in schemas["code_interpreter"].function.parameters.properties
+    for name in (
+        "inspect_range",
+        "find_cells",
+        "write_range",
+        "format_range",
+        "fill_formula",
+        "clear_range",
+        "delete_rows",
+        "delete_columns",
+    ):
+        assert "omit when" in schemas[name].function.parameters.properties["sheet_name"].description
+    assert "cannot locate blank cells" in schemas["find_cells"].function.parameters.properties["query"].description
+    assert "explicit rectangle's shape" in write_data.description
+    assert schemas["manage_sheet"].function.parameters.properties["action"].enum == [
+        "create",
+        "rename",
+        "delete",
+        "copy",
+        "move",
+        "hide",
+        "unhide",
+    ]
+    assert schemas["find_cells"].function.parameters.properties["match"].enum == [
+        "contains",
+        "equals",
+        "prefix",
+        "regex",
+    ]
+    assert schemas["find_cells"].function.parameters.properties["search_in"].enum == [
+        "values",
+        "formulas",
+        "both",
+    ]
+    assert schemas["find_cells"].function.parameters.properties["return"].enum == ["first", "all"]
+    assert serialized["write_range"]["function"]["parameters"]["properties"]["data"]["type"] == [
+        "array",
+        "string",
+        "number",
+        "boolean",
+    ]
+
+
+def test_spreadsheet_rl_rollout_response_limit_covers_inspect_range_budget():
+    repo_root = Path(__file__).parents[4]
+    rollout = OmegaConf.load(repo_root / "configs" / "spreadsheet_rl_multiturn_grpo.yaml")
+    tools = OmegaConf.load(repo_root / "configs" / "tool" / "spreadsheet_tools.yaml")
+    inspect = next(tool for tool in tools.tools if tool.class_name == "verl.tools.inspect_range.InspectRangeTool")
+
+    assert rollout.actor_rollout_ref.rollout.multi_turn.max_tool_response_length >= inspect.config.max_response_chars
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("raw_data", "expected"),
+    [
+        ("[[1, 2]]", [[1, 2]]),
+        ("done", "done"),
+        ("42", 42),
+        ("true", True),
+    ],
+)
+async def test_qwen3_coder_union_parameter_accepts_scalar_or_array(raw_data, expected):
+    schemas = _spreadsheet_tool_schemas()
+    schema = next(schema for schema in schemas if schema.function.name == "write_range")
+    parser = Qwen3XMLToolParser(
+        DummyTokenizer(
+            """
+<tool_call>
+<function=write_range>
+<parameter=range>A1:B1</parameter>
+<parameter=data>{raw_data}</parameter>
+</function>
+</tool_call>
+""".format(raw_data=raw_data)
+        )
+    )
+
+    _, tool_calls = await parser.extract_tool_calls([], [schema])
+
+    assert json.loads(tool_calls[0].arguments) == {"range": "A1:B1", "data": expected}
+
+
 @pytest.mark.asyncio
 async def test_hermes_invalid_json_returns_feedback_call():
     text = '</think><tool_call>{"name": "code_interpreter", "arguments": {bad}}</tool_call>'
@@ -365,13 +479,13 @@ async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_sheet_name():
 
 
 @pytest.mark.asyncio
-async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_ranges_array():
+async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_comma_separated_ranges():
     parser = Qwen3XMLToolParser(
         DummyTokenizer(
             """
 <tool_call>
 <function=inspect_range>
-<parameter=ranges>["A1:B2", "J1:J2"]</parameter>
+<parameter=range>A1:B2,J1:J2</parameter>
 <parameter=sheet_name>Sheet1</parameter>
 </function>
 </tool_call>
@@ -384,7 +498,7 @@ async def test_qwen3_coder_spreadsheet_xml_inspect_range_accepts_ranges_array():
     assert len(tool_calls) == 1
     assert tool_calls[0].name == "inspect_range"
     assert json.loads(tool_calls[0].arguments) == {
-        "ranges": ["A1:B2", "J1:J2"],
+        "range": "A1:B2,J1:J2",
         "sheet_name": "Sheet1",
     }
 

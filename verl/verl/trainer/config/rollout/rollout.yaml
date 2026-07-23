@@ -182,6 +182,9 @@ multi_turn:
   # max parallel call for tools in single turn
   max_parallel_calls: 1
 
+  # optional lower cap when a turn contains any tool that must execute serially
+  max_serial_calls: null
+
   # max length of tool response
   max_tool_response_length: 256
 

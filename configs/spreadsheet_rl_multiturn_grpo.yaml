@@ -18,7 +18,8 @@ actor_rollout_ref:
     multi_turn:
       enable: True
       max_parallel_calls: 20
-      max_tool_response_length: 8192
+      max_serial_calls: 4
+      max_tool_response_length: 10240
 
 reward:
   reward_manager:

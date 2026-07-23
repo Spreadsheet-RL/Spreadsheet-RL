@@ -12,12 +12,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
+from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
 from .recalculate import _file_signature, _recalculate_workbook_for_commit
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .worksheet_resolution import resolve_worksheet as _resolve_target_worksheet
 
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
@@ -46,16 +47,30 @@ def _col_index_to_letter(index: int) -> str:
 
 
 def _coerce_token_list(value: Any, *, field_name: str) -> list[str]:
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            raise RuntimeError(f"{field_name} received empty; pass a range string such as '2:3' or a non-empty list.")
+        if token.startswith("["):
+            try:
+                decoded = json.loads(token)
+            except json.JSONDecodeError as exc:
+                raise RuntimeError(
+                    f'{field_name} received {value!r}; pass valid JSON list strings such as ["2:3"].'
+                ) from exc
+            value = decoded
+        else:
+            value = [token]
     if not isinstance(value, list) or not value:
-        raise RuntimeError(f"{field_name} must be a non-empty list of non-empty strings")
+        raise RuntimeError(f"{field_name} received {value!r}; pass a range string or non-empty list of strings.")
 
     tokens: list[str] = []
     for idx, item in enumerate(value, start=1):
         if not isinstance(item, str):
-            raise RuntimeError(f"{field_name}[{idx}] must be a string")
+            raise RuntimeError(f"{field_name}[{idx}] received {item!r}; pass a non-empty range string.")
         token = item.strip()
         if not token:
-            raise RuntimeError(f"{field_name}[{idx}] must be a non-empty string")
+            raise RuntimeError(f"{field_name}[{idx}] received empty; pass a non-empty range string.")
         tokens.append(token)
     return tokens
 
@@ -160,7 +175,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_sheet_arena_data_root()
+    workspace_base = get_spreadsheet_rl_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -215,16 +230,18 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(" \t\n\r\f\v\"")
-    if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
-        name = name[1:-1].replace("''", "'")
-        return name.strip()
+    name = value.strip('\t\n\r\f\v"')
+    quoted = name.strip()
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return quoted[1:-1]
 
-    if name.startswith("'") and not name.endswith("'"):
-        name = name[1:]
-    elif name.endswith("'") and not name.startswith("'"):
-        name = name[:-1]
-    return name.strip()
+    if quoted.startswith("'") and not quoted.endswith("'"):
+        return quoted[1:]
+    if quoted.endswith("'") and not quoted.startswith("'"):
+        return quoted[:-1]
+    return name.strip("\t\n\r\f\v")
 
 
 def _quote_sheet_name_for_a1(sheet_name: str) -> str:
@@ -235,7 +252,7 @@ def _quote_sheet_name_for_a1(sheet_name: str) -> str:
 
 
 def _split_sheet_token(token: str) -> tuple[Optional[str], str]:
-    token = token.strip(" \t\n\r\f\v\"")
+    token = token.strip(' \t\n\r\f\v"')
     if not token:
         raise ValueError("empty range")
     if "!" not in token:
@@ -278,20 +295,21 @@ def _scan_zip_metadata(
                 total_compressed += compressed
 
                 if uncompressed > max_member_uncompressed_bytes:
+                    filename = getattr(info, "filename", "?")
                     return (
                         "zip member too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
+                        f"(name={filename!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
                     )
                 if compressed > 0 and max_ratio > 0 and (uncompressed / compressed) > max_ratio:
+                    filename = getattr(info, "filename", "?")
                     return (
                         "zip member compression ratio too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
+                        f"(name={filename!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
                     )
 
                 if total_uncompressed > max_total_uncompressed_bytes:
                     return (
-                        "zip contents too large "
-                        f"(total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
+                        f"zip contents too large (total_bytes={total_uncompressed}, max={max_total_uncompressed_bytes})"
                     )
 
             if total_compressed > 0 and max_ratio > 0 and (total_uncompressed / total_compressed) > max_ratio:
@@ -356,26 +374,6 @@ def _acquire_lockfile(lock_path: Path, timeout_s: float):
     except BaseException:
         lock_file.close()
         raise
-
-
-def _resolve_target_worksheet(wb, requested_name: str):
-    worksheets = getattr(wb, "worksheets", None) or []
-    for ws in worksheets:
-        if getattr(ws, "title", None) == requested_name:
-            return ws
-
-    requested_cf = requested_name.casefold()
-    matches = [ws for ws in worksheets if getattr(ws, "title", "").casefold() == requested_cf]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        candidates = ", ".join(repr(getattr(ws, "title", "")) for ws in matches[:5])
-        raise RuntimeError(f"ambiguous sheet name: {requested_name!r} matches {candidates}")
-
-    sheetnames = getattr(wb, "sheetnames", None) or []
-    if any(isinstance(name, str) and name.casefold() == requested_cf for name in sheetnames):
-        raise RuntimeError(f"sheet is not a worksheet: {requested_name!r}")
-    raise RuntimeError(f"sheet not found: {requested_name!r}")
 
 
 def _json_dumps_compact(payload: Any) -> str:
@@ -719,7 +717,7 @@ class DeleteRowsTool(BaseTool):
 
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
@@ -744,64 +742,87 @@ class DeleteRowsTool(BaseTool):
             if relpath is None:
                 return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
         if relpath.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         rows_raw = parameters.get("rows")
         try:
             rows_token = _coerce_token_list(rows_raw, field_name="rows")
-        except RuntimeError:
-            return ToolResponse(
-                text=(
-                    "Error: rows must be a non-empty list of row range strings "
-                    "(e.g. ['2:3'] or ['3', '5', '7:9'])."
-                )
-            ), 0.0, {"status": "error", "error": "invalid_rows"}
+        except RuntimeError as exc:
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_rows"}
 
         sheet_name_raw = parameters.get("sheet_name")
         sheet_name = None
         if sheet_name_raw is not None:
             if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-                return ToolResponse(text="Error: sheet_name must be a non-empty string."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name must be a non-empty string."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             sheet_name = _normalize_sheet_name(sheet_name_raw)
             if not sheet_name:
-                return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name is empty after normalization."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
         file_path = _resolve_workspace_file(workspace_id=workspace_id, relpath=relpath)
         if file_path is None:
-            return ToolResponse(text=f"Error: file not found: {relpath}"), 0.0, {
-                "status": "error",
-                "error": "file_not_found",
-            }
+            return (
+                ToolResponse(text=f"Error: file not found: {relpath}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "file_not_found",
+                },
+            )
         if self.max_file_size_bytes is not None:
             try:
                 file_size = file_path.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to stat file: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "stat_failed",
+                    },
+                )
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return (
+                    ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "file_too_large",
+                    },
+                )
 
         try:
             resolved_sheet, range_out, deleted_rows, max_row, max_col = await asyncio.to_thread(
@@ -818,10 +839,14 @@ class DeleteRowsTool(BaseTool):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return ToolResponse(text=f"Error: failed to delete rows: {exc}"), 0.0, {
-                "status": "error",
-                "error": "delete_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: failed to delete rows: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "delete_failed",
+                },
+            )
 
         payload = {
             "status": "success",
@@ -876,7 +901,7 @@ class DeleteColumnsTool(BaseTool):
 
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
@@ -901,64 +926,87 @@ class DeleteColumnsTool(BaseTool):
             if relpath is None:
                 return ToolResponse(text="Error: invalid path."), 0.0, {"status": "error", "error": "invalid_path"}
         if relpath.suffix.lower() != ".xlsx":
-            return ToolResponse(text="Error: only .xlsx workbooks are supported."), 0.0, {
-                "status": "error",
-                "error": "invalid_path",
-            }
+            return (
+                ToolResponse(text="Error: only .xlsx workbooks are supported."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "invalid_path",
+                },
+            )
 
         columns_raw = parameters.get("columns")
         try:
             columns_token = _coerce_token_list(columns_raw, field_name="columns")
-        except RuntimeError:
-            return ToolResponse(
-                text=(
-                    "Error: columns must be a non-empty list of column range strings "
-                    "(e.g. ['B:D'] or ['B', 'D', 'F:G'])."
-                )
-            ), 0.0, {"status": "error", "error": "invalid_columns"}
+        except RuntimeError as exc:
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_columns"}
 
         sheet_name_raw = parameters.get("sheet_name")
         sheet_name = None
         if sheet_name_raw is not None:
             if not isinstance(sheet_name_raw, str) or not sheet_name_raw.strip():
-                return ToolResponse(text="Error: sheet_name must be a non-empty string."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name must be a non-empty string."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
             sheet_name = _normalize_sheet_name(sheet_name_raw)
             if not sheet_name:
-                return ToolResponse(text="Error: sheet_name is empty after normalization."), 0.0, {
-                    "status": "error",
-                    "error": "invalid_sheet_name",
-                }
+                return (
+                    ToolResponse(text="Error: sheet_name is empty after normalization."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "invalid_sheet_name",
+                    },
+                )
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))
         if workspace_id is None:
-            return ToolResponse(text="Error: workspace_id is missing/invalid."), 0.0, {
-                "status": "error",
-                "error": "missing_workspace_id",
-            }
+            return (
+                ToolResponse(text="Error: workspace_id is missing/invalid."),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "missing_workspace_id",
+                },
+            )
         file_path = _resolve_workspace_file(workspace_id=workspace_id, relpath=relpath)
         if file_path is None:
-            return ToolResponse(text=f"Error: file not found: {relpath}"), 0.0, {
-                "status": "error",
-                "error": "file_not_found",
-            }
+            return (
+                ToolResponse(text=f"Error: file not found: {relpath}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "file_not_found",
+                },
+            )
         if self.max_file_size_bytes is not None:
             try:
                 file_size = file_path.stat().st_size
             except OSError as exc:
-                return ToolResponse(text=f"Error: failed to stat file: {exc}"), 0.0, {
-                    "status": "error",
-                    "error": "stat_failed",
-                }
+                return (
+                    ToolResponse(text=f"Error: failed to stat file: {exc}"),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "stat_failed",
+                    },
+                )
             if file_size > self.max_file_size_bytes:
                 max_mb = self.max_file_size_bytes // (1024 * 1024)
                 actual_mb = file_size / (1024 * 1024)
-                return ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."), 0.0, {
-                    "status": "error",
-                    "error": "file_too_large",
-                }
+                return (
+                    ToolResponse(text=f"Error: workbook is too large ({actual_mb:.1f}MB > {max_mb}MB)."),
+                    0.0,
+                    {
+                        "status": "error",
+                        "error": "file_too_large",
+                    },
+                )
 
         try:
             resolved_sheet, range_out, deleted_cols, max_row, max_col = await asyncio.to_thread(
@@ -975,10 +1023,14 @@ class DeleteColumnsTool(BaseTool):
         except asyncio.CancelledError:
             raise
         except Exception as exc:
-            return ToolResponse(text=f"Error: failed to delete columns: {exc}"), 0.0, {
-                "status": "error",
-                "error": "delete_failed",
-            }
+            return (
+                ToolResponse(text=f"Error: failed to delete columns: {exc}"),
+                0.0,
+                {
+                    "status": "error",
+                    "error": "delete_failed",
+                },
+            )
 
         payload = {
             "status": "success",

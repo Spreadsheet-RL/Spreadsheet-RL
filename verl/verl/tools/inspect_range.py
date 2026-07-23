@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Any, Optional
 from uuid import uuid4
 
-from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
+from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .worksheet_resolution import WorksheetResolutionError, resolve_worksheet
 
 _A1_CELL_RE = r"[A-Z]{1,3}[0-9]{1,7}"
 _A1_COL_RE = r"[A-Z]{1,3}"
@@ -45,16 +46,18 @@ def _normalize_primary_ext(primary_ext: Any) -> Optional[str]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(' \t\n\r\f\v"')
-    if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
-        name = name[1:-1].replace("''", "'")
-        return name.strip()
+    name = value.strip('\t\n\r\f\v"')
+    quoted = name.strip()
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return quoted[1:-1]
 
-    if name.startswith("'") and not name.endswith("'"):
-        name = name[1:]
-    elif name.endswith("'") and not name.startswith("'"):
-        name = name[:-1]
-    return name.strip()
+    if quoted.startswith("'") and not quoted.endswith("'"):
+        return quoted[1:]
+    if quoted.endswith("'") and not quoted.startswith("'"):
+        return quoted[:-1]
+    return name.strip("\t\n\r\f\v")
 
 
 def _normalize_cell_range(value: str) -> str:
@@ -84,6 +87,10 @@ def _parse_sheet_cell_range(token: str, *, default_sheet_name: str) -> tuple[str
 
 
 class _TooManyRangesError(ValueError):
+    pass
+
+
+class _SummaryRangeTooLargeError(ValueError):
     pass
 
 
@@ -229,7 +236,7 @@ def _get_max_response_chars(config: dict[str, Any]) -> int:
             continue
         try:
             n = int(raw)
-            return min(max(128, n), 8192)
+            return min(max(128, n), 10240)
         except (TypeError, ValueError):
             continue
     return 900
@@ -250,6 +257,25 @@ def _get_max_ranges(config: dict[str, Any]) -> int:
         return 20
 
 
+def _get_max_summary_cells(config: dict[str, Any]) -> int:
+    try:
+        n = int(config.get("max_summary_cells", 100_000))
+        return min(max(1, n), 1_000_000)
+    except Exception:
+        return 100_000
+
+
+def _coerce_mode(value: Any) -> str:
+    if value is None:
+        return "cells"
+    if not isinstance(value, str):
+        raise ValueError("mode must be 'cells' or 'summary'.")
+    mode = value.strip().casefold()
+    if mode not in {"cells", "summary"}:
+        raise ValueError("mode must be 'cells' or 'summary'.")
+    return mode
+
+
 def _get_max_string_chars() -> int:
     raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
@@ -261,6 +287,32 @@ def _get_max_string_chars() -> int:
 
 def _json_dumps_compact(payload: Any) -> str:
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _coerce_bool_parameter(value: Any, *, parameter: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().casefold()
+        if token == "true":
+            return True
+        if token == "false":
+            return False
+    raise ValueError(f"{parameter} received {value!r}; pass true or false.")
+
+
+def _coerce_ranges_parameter(value: Any) -> list[Any]:
+    if isinstance(value, str):
+        token = value.strip()
+        if not token:
+            raise ValueError("ranges received empty; pass a JSON list of A1 range strings.")
+        try:
+            value = json.loads(token)
+        except json.JSONDecodeError as exc:
+            raise ValueError('ranges received invalid JSON string; pass a JSON list like ["A1", "B2:C3"].') from exc
+    if not isinstance(value, list):
+        raise ValueError(f"ranges received {type(value).__name__}; pass a list of A1 range strings.")
+    return value
 
 
 def _truncate_str(value: str, max_chars: int) -> str:
@@ -565,6 +617,119 @@ def _sample_linear_indices(total: int, *, head: int, tail: int) -> list[int]:
     indices = list(range(head_n))
     indices.extend(range(total - tail_n, total))
     return indices
+
+
+def _address_for_linear_index(*, sheet: str, min_row: int, min_col: int, cols: int, index: int) -> str:
+    row_num = min_row + index // cols
+    col_num = min_col + index % cols
+    return _format_a1_address(sheet_name=sheet, row=row_num, col=col_num)
+
+
+def _omitted_from_address(cells: list[Any], returned_count: int, fallback: Optional[str]) -> Optional[str]:
+    if returned_count < len(cells):
+        cell = cells[returned_count]
+        if isinstance(cell, dict):
+            address = cell.get("address")
+            if isinstance(address, str) and address:
+                return address
+    return fallback
+
+
+def _set_prefix_cell_window(
+    payload: dict[str, Any],
+    metrics: Optional[dict[str, Any]],
+    *,
+    cells: list[Any],
+    returned_count: int,
+    total_cells: int,
+    omitted_from_fallback: Optional[str] = None,
+    force_truncated: bool = False,
+) -> None:
+    returned = max(0, min(returned_count, len(cells)))
+    total = max(total_cells, returned)
+    payload["cells"] = cells[:returned]
+    payload["returned_cells"] = returned
+    if metrics is not None:
+        metrics["returned_cells"] = returned
+
+    is_truncated = force_truncated or returned < total
+    payload["truncated"] = is_truncated
+    if metrics is not None:
+        metrics["truncated"] = is_truncated
+
+    if returned < total:
+        payload["omitted_cells"] = total - returned
+        omitted_from = _omitted_from_address(cells, returned, omitted_from_fallback)
+        if omitted_from:
+            payload["omitted_from"] = omitted_from
+        else:
+            payload.pop("omitted_from", None)
+    else:
+        payload.pop("omitted_cells", None)
+        payload.pop("omitted_from", None)
+
+
+def _fit_prefix_cells_to_budget(
+    payload: dict[str, Any],
+    metrics: Optional[dict[str, Any]],
+    *,
+    cells: list[Any],
+    total_cells: int,
+    max_response_chars: int,
+    omitted_from_fallback: Optional[str] = None,
+    force_truncated: bool = False,
+) -> bool:
+    keys = ("cells", "returned_cells", "omitted_cells", "omitted_from", "truncated")
+    sentinel = object()
+    saved_payload = {key: payload.get(key, sentinel) for key in keys}
+    saved_metrics = {}
+    if metrics is not None:
+        saved_metrics = {key: metrics.get(key, sentinel) for key in ("returned_cells", "truncated")}
+
+    low = 0
+    high = len(cells)
+    best = -1
+    while low <= high:
+        mid = (low + high) // 2
+        _set_prefix_cell_window(
+            payload,
+            metrics,
+            cells=cells,
+            returned_count=mid,
+            total_cells=total_cells,
+            omitted_from_fallback=omitted_from_fallback,
+            force_truncated=force_truncated,
+        )
+        if len(_json_dumps_compact(payload)) <= max_response_chars:
+            best = mid
+            low = mid + 1
+        else:
+            high = mid - 1
+
+    if best >= 1:
+        _set_prefix_cell_window(
+            payload,
+            metrics,
+            cells=cells,
+            returned_count=best,
+            total_cells=total_cells,
+            omitted_from_fallback=omitted_from_fallback,
+            force_truncated=force_truncated,
+        )
+        return True
+
+    for key, value in saved_payload.items():
+        if value is sentinel:
+            payload.pop(key, None)
+        else:
+            payload[key] = value
+    if metrics is not None:
+        for key, value in saved_metrics.items():
+            if value is sentinel:
+                metrics.pop(key, None)
+            else:
+                metrics[key] = value
+    return False
 
 
 def _fill_missing_boundaries(
@@ -873,21 +1038,10 @@ def _load_workbook(path: Path, *, data_only: bool, read_only: bool):
 
 
 def _resolve_sheet_name(wb: Any, requested_sheet: str) -> str:
-    sheet_map: dict[str, str | None] = {}
-    for sheet in wb.sheetnames:
-        key = sheet.lower()
-        if key not in sheet_map:
-            sheet_map[key] = sheet
-        elif sheet_map[key] != sheet:
-            sheet_map[key] = None
-
-    key = requested_sheet.lower()
-    if key not in sheet_map:
-        raise ValueError(f"sheet not found: {requested_sheet}")
-    actual = sheet_map[key]
-    if actual is None:
-        raise ValueError(f"ambiguous sheet name: {requested_sheet}")
-    return actual
+    try:
+        return str(resolve_worksheet(wb, requested_sheet).title)
+    except WorksheetResolutionError as exc:
+        raise ValueError(str(exc)) from None
 
 
 def _build_target(wb: Any, token: str) -> _RangeTarget:
@@ -1317,8 +1471,10 @@ def _inspect_range_sync(
     display_file: str | None = None,
     range_token: str,
     max_cells: int,
+    max_summary_cells: int,
     max_cf_rules: int,
     include_details: bool,
+    mode: str,
     max_response_chars: int,
     wb: Any | None = None,
     shared_state: Optional[dict[str, Any]] = None,
@@ -1340,6 +1496,95 @@ def _inspect_range_sync(
 
         rows = max_row - min_row + 1
         cols = max_col - min_col + 1
+
+        if mode == "summary":
+            if cell_count > max_summary_cells:
+                raise _SummaryRangeTooLargeError(
+                    f"summary range is too large (cells={cell_count} > {max_summary_cells}); narrow the range."
+                )
+            non_empty_cells = 0
+            formula_cells = 0
+            error_cells = 0
+            formula_positions: set[tuple[int, int]] = set()
+            for row_num, row in enumerate(
+                ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col),
+                start=min_row,
+            ):
+                for col_num, cell in enumerate(row, start=min_col):
+                    data_type = getattr(cell, "data_type", None)
+                    value = getattr(cell, "value", None)
+                    is_formula = data_type == "f"
+                    if is_formula:
+                        formula_cells += 1
+                        formula_positions.add((row_num, col_num))
+                    if is_formula or value is not None:
+                        non_empty_cells += 1
+                    if data_type == "e":
+                        error_cells += 1
+
+            if formula_positions:
+                summary_wb_values = None
+                if shared_state is None:
+                    summary_wb_values = _load_workbook(file_path, data_only=True, read_only=True)
+                    ws_summary_values = summary_wb_values[sheet]
+                else:
+                    ws_summary_values = _get_data_only_worksheet(
+                        file_path=file_path,
+                        sheet=sheet,
+                        shared_state=shared_state,
+                    )
+                try:
+                    for row_num, row in enumerate(
+                        ws_summary_values.iter_rows(
+                            min_row=min_row,
+                            max_row=max_row,
+                            min_col=min_col,
+                            max_col=max_col,
+                        ),
+                        start=min_row,
+                    ):
+                        for col_num, cell in enumerate(row, start=min_col):
+                            if (row_num, col_num) in formula_positions and getattr(cell, "data_type", None) == "e":
+                                error_cells += 1
+                finally:
+                    if summary_wb_values is not None:
+                        summary_wb_values.close()
+
+            payload = {
+                "status": "success",
+                "file": display_file or str(file_path),
+                "sheet": sheet,
+                "range": f"{_quote_sheet_name_for_a1(sheet)}!{cell_range}",
+                "shape": {
+                    "rows": rows,
+                    "cols": cols,
+                    "cells": cell_count,
+                    "min_col": min_col,
+                    "min_row": min_row,
+                    "max_col": max_col,
+                    "max_row": max_row,
+                },
+                "summary": {
+                    "non_empty_cells": non_empty_cells,
+                    "empty_cells": cell_count - non_empty_cells,
+                    "formula_cells": formula_cells,
+                    "error_cells": error_cells,
+                    "non_empty_fraction": non_empty_cells / cell_count,
+                },
+                "truncated": False,
+            }
+            metrics = {
+                "status": "success",
+                "file": display_file or str(file_path),
+                "sheet": sheet,
+                "requested_cells": cell_count,
+                "scanned_cells": cell_count,
+                "returned_cells": 0,
+                "truncated": False,
+                "include_details": False,
+                "mode": "summary",
+            }
+            return payload, metrics
 
         truncated = cell_count > max_cells
         ws_values = None
@@ -1392,8 +1637,7 @@ def _inspect_range_sync(
                             entry["style"] = _style_to_json(cell)
                         cells.append(entry)
             else:
-                sample_indices = _sample_linear_indices(cell_count, head=5, tail=5)
-                for idx in sample_indices:
+                for idx in range(min(cell_count, max_cells)):
                     r_off = idx // cols
                     c_off = idx - r_off * cols
                     row_num = min_row + r_off
@@ -1458,6 +1702,22 @@ def _inspect_range_sync(
                 "truncated": truncated,
                 "cells": cells,
             }
+            if truncated:
+                omitted_from = _address_for_linear_index(
+                    sheet=sheet,
+                    min_row=min_row,
+                    min_col=min_col,
+                    cols=cols,
+                    index=len(cells),
+                )
+                _set_prefix_cell_window(
+                    payload,
+                    None,
+                    cells=cells,
+                    returned_count=len(cells),
+                    total_cells=cell_count,
+                    omitted_from_fallback=omitted_from,
+                )
 
             if include_details and not truncated:
                 merged_ranges = _extract_merged_ranges(ws, requested_boundaries=target.boundaries)
@@ -1496,6 +1756,7 @@ def _inspect_range_sync(
                 "returned_cells": len(cells),
                 "truncated": truncated,
                 "include_details": include_details,
+                "mode": "cells",
             }
             text = _json_dumps_compact(payload)
             if len(text) <= max_response_chars:
@@ -1526,41 +1787,59 @@ def _inspect_range_sync(
             original_cells = payload.get("cells")
             if not isinstance(original_cells, list) or not original_cells:
                 return payload, metrics
+            original_cells = list(original_cells)
+            omitted_from_fallback = None
+            if len(original_cells) < cell_count:
+                omitted_from_fallback = _address_for_linear_index(
+                    sheet=sheet,
+                    min_row=min_row,
+                    min_col=min_col,
+                    cols=cols,
+                    index=len(original_cells),
+                )
 
-            for head, tail in ((5, 5), (3, 3), (2, 2), (1, 1)):
-                if len(original_cells) <= head + tail:
-                    candidate_cells = original_cells
+            if _fit_prefix_cells_to_budget(
+                payload,
+                metrics,
+                cells=original_cells,
+                total_cells=cell_count,
+                max_response_chars=max_response_chars,
+                omitted_from_fallback=omitted_from_fallback,
+                force_truncated=bool(payload.get("truncated")),
+            ):
+                return payload, metrics
+
+            stripped_cells: list[Any] = []
+            for cell in original_cells:
+                if isinstance(cell, dict):
+                    stripped = dict(cell)
+                    stripped.pop("style", None)
+                    stripped.pop("number_format", None)
+                    stripped_cells.append(stripped)
                 else:
-                    candidate_cells = original_cells[:head] + original_cells[-tail:]
-                payload["cells"] = candidate_cells
-                payload["truncated"] = True
-                metrics["truncated"] = True
-                metrics["returned_cells"] = len(candidate_cells)
-                text = _json_dumps_compact(payload)
-                if len(text) <= max_response_chars:
-                    return payload, metrics
+                    stripped_cells.append(cell)
 
-            trimmed_cells = payload.get("cells")
-            if isinstance(trimmed_cells, list):
-                for cell in trimmed_cells:
-                    if not isinstance(cell, dict):
-                        continue
-                    cell.pop("style", None)
-                    cell.pop("number_format", None)
-            text = _json_dumps_compact(payload)
-            if len(text) <= max_response_chars:
+            if _fit_prefix_cells_to_budget(
+                payload,
+                metrics,
+                cells=stripped_cells,
+                total_cells=cell_count,
+                max_response_chars=max_response_chars,
+                omitted_from_fallback=omitted_from_fallback,
+                force_truncated=bool(payload.get("truncated")),
+            ):
                 return payload, metrics
 
-            payload["cells"] = payload["cells"][:1]
-            payload["truncated"] = True
-            metrics["truncated"] = True
-            metrics["returned_cells"] = len(payload["cells"])
-            text = _json_dumps_compact(payload)
-            if len(text) <= max_response_chars:
-                return payload, metrics
-
-            payload["cells"] = []
-            metrics["returned_cells"] = 0
+            first_omitted = _omitted_from_address(stripped_cells, 0, omitted_from_fallback)
+            _set_prefix_cell_window(
+                payload,
+                metrics,
+                cells=stripped_cells,
+                returned_count=0,
+                total_cells=cell_count,
+                omitted_from_fallback=first_omitted,
+                force_truncated=True,
+            )
             text = _json_dumps_compact(payload)
             if len(text) <= max_response_chars:
                 return payload, metrics
@@ -1570,7 +1849,12 @@ def _inspect_range_sync(
                 "truncated": True,
                 "returned_cells": 0,
             }
-            for key in ("file", "sheet", "range", "shape"):
+            for key in (
+                "file",
+                "sheet",
+                "range",
+                "shape",
+            ):
                 value = payload.get(key)
                 if value is None:
                     continue
@@ -1600,8 +1884,10 @@ def _inspect_ranges_sync(
     display_file: str | None = None,
     range_tokens: list[str],
     max_cells: int,
+    max_summary_cells: int,
     max_cf_rules: int,
     include_details: bool,
+    mode: str,
     max_response_chars: int,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     wb = _load_workbook(file_path, data_only=False, read_only=not include_details)
@@ -1615,8 +1901,10 @@ def _inspect_ranges_sync(
                 display_file=display_file,
                 range_token=token,
                 max_cells=max_cells,
+                max_summary_cells=max_summary_cells,
                 max_cf_rules=max_cf_rules,
                 include_details=include_details,
+                mode=mode,
                 max_response_chars=max_response_chars,
                 wb=wb,
                 shared_state=shared_state,
@@ -1646,6 +1934,14 @@ def _trim_multi_range_payload(
     if len(_json_dumps_compact(payload)) <= max_response_chars:
         return
 
+    ranges = payload.get("ranges")
+    if isinstance(ranges, list) and payload.get("file") is not None:
+        for item in ranges:
+            if isinstance(item, dict):
+                item.pop("file", None)
+        if len(_json_dumps_compact(payload)) <= max_response_chars:
+            return
+
     metadata_keys = (
         "merged_ranges",
         "hidden",
@@ -1660,28 +1956,80 @@ def _trim_multi_range_payload(
             continue
         for key in metadata_keys:
             item.pop(key, None)
-        item["truncated"] = True
     payload["truncated"] = True
     metrics["truncated"] = True
     if len(_json_dumps_compact(payload)) <= max_response_chars:
         return
 
+    ranges = payload.get("ranges")
+    if (
+        isinstance(ranges, list)
+        and ranges
+        and all(isinstance(item, dict) and isinstance(item.get("summary"), dict) for item in ranges)
+    ):
+        try:
+            total_range_count = int(payload.get("range_count") or len(ranges))
+        except (TypeError, ValueError):
+            total_range_count = len(ranges)
+        original_ranges = list(ranges)
+        low = 0
+        high = len(original_ranges)
+        best_count = -1
+        while low <= high:
+            count = (low + high) // 2
+            payload["ranges"] = original_ranges[:count]
+            payload["omitted_ranges"] = max(total_range_count - count, 0)
+            if len(_json_dumps_compact(payload)) <= max_response_chars:
+                best_count = count
+                low = count + 1
+            else:
+                high = count - 1
+        if best_count >= 0:
+            payload["ranges"] = original_ranges[:best_count]
+            payload["omitted_ranges"] = max(total_range_count - best_count, 0)
+            payload["returned_cells"] = 0
+            metrics["returned_cells"] = 0
+            return
+        payload["ranges"] = []
+        payload["omitted_ranges"] = total_range_count
+
+    item_cells: list[tuple[dict[str, Any], list[Any], int, Optional[str], bool]] = []
+    for item in payload.get("ranges", []):
+        if not isinstance(item, dict):
+            continue
+        prior_truncated = bool(item.get("truncated"))
+        cells = item.get("cells")
+        if not isinstance(cells, list):
+            continue
+        shape = item.get("shape")
+        total_cells = len(cells)
+        if isinstance(shape, dict):
+            try:
+                total_cells = int(shape.get("cells") or total_cells)
+            except (TypeError, ValueError):
+                total_cells = len(cells)
+        omitted_from = item.get("omitted_from")
+        if not isinstance(omitted_from, str):
+            omitted_from = None
+        item_cells.append((item, list(cells), total_cells, omitted_from, prior_truncated))
+
     for per_range_cells in (6, 4, 2, 1, 0):
         returned_cells = 0
-        for item in payload.get("ranges", []):
-            if not isinstance(item, dict):
-                continue
-            cells = item.get("cells")
-            if not isinstance(cells, list):
-                continue
-            if per_range_cells <= 0:
-                item["cells"] = []
-            elif len(cells) > per_range_cells:
-                head = per_range_cells // 2
-                tail = per_range_cells - head
-                item["cells"] = cells[:head] + cells[-tail:]
+        for item, cells, total_cells, omitted_from, prior_truncated in item_cells:
+            keep = max(0, min(per_range_cells, len(cells)))
+            fallback = omitted_from
+            if keep < len(cells):
+                fallback = _omitted_from_address(cells, keep, omitted_from)
+            _set_prefix_cell_window(
+                item,
+                None,
+                cells=cells,
+                returned_count=keep,
+                total_cells=total_cells,
+                omitted_from_fallback=fallback,
+                force_truncated=prior_truncated,
+            )
             returned_cells += len(item.get("cells") or [])
-            item["truncated"] = True
         payload["returned_cells"] = returned_cells
         metrics["returned_cells"] = returned_cells
         if len(_json_dumps_compact(payload)) <= max_response_chars:
@@ -1767,9 +2115,35 @@ def _trim_single_range_payload(
         payload["file"] = file_value
     cells = payload.get("cells")
     if isinstance(cells, list) and cells:
-        payload["cells"] = []
-        metrics["returned_cells"] = 0
-        payload["returned_cells"] = 0
+        shape = payload.get("shape")
+        total_cells = len(cells)
+        if isinstance(shape, dict):
+            try:
+                total_cells = int(shape.get("cells") or total_cells)
+            except (TypeError, ValueError):
+                total_cells = len(cells)
+        omitted_from = payload.get("omitted_from")
+        if not isinstance(omitted_from, str):
+            omitted_from = None
+        if _fit_prefix_cells_to_budget(
+            payload,
+            metrics,
+            cells=list(cells),
+            total_cells=total_cells,
+            max_response_chars=max_response_chars,
+            omitted_from_fallback=omitted_from,
+            force_truncated=True,
+        ):
+            return
+        _set_prefix_cell_window(
+            payload,
+            metrics,
+            cells=list(cells),
+            returned_count=0,
+            total_cells=total_cells,
+            omitted_from_fallback=_omitted_from_address(list(cells), 0, omitted_from),
+            force_truncated=True,
+        )
         if len(_json_dumps_compact(payload)) <= max_response_chars:
             return
 
@@ -1832,7 +2206,7 @@ def _resolve_workbook_path(
     if not workspace_id:
         return None, attempted
 
-    workspace_base = get_sheet_arena_data_root()
+    workspace_base = get_spreadsheet_rl_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -1863,6 +2237,7 @@ class InspectRangeTool(BaseTool):
         super().__init__(config, tool_schema)
         self._instance_dict: dict[str, dict[str, Any]] = {}
         self.max_cells = _get_max_cells(config)
+        self.max_summary_cells = _get_max_summary_cells(config)
         self.max_cf_rules = _get_max_cf_rules(config)
         self.max_file_mb = _get_max_file_mb(config)
         self.max_response_chars = _get_max_response_chars(config)
@@ -1910,9 +2285,11 @@ class InspectRangeTool(BaseTool):
                     },
                 )
             if ranges_raw is not None:
-                if not isinstance(ranges_raw, list):
+                try:
+                    ranges_raw = _coerce_ranges_parameter(ranges_raw)
+                except ValueError as exc:
                     return (
-                        ToolResponse(text="Error: 'ranges' must be a list of A1 range strings."),
+                        ToolResponse(text=f"Error: {exc}"),
                         0.0,
                         {
                             "status": "error",
@@ -1977,17 +2354,30 @@ class InspectRangeTool(BaseTool):
                         "error": "invalid_sheet_name",
                     },
                 )
-        include_details_raw = parameters.get("include_details", False)
-        if not isinstance(include_details_raw, bool):
+        try:
+            include_details = _coerce_bool_parameter(
+                parameters.get("include_details", False),
+                parameter="include_details",
+            )
+        except ValueError as exc:
             return (
-                ToolResponse(text="Error: include_details must be a boolean."),
+                ToolResponse(text=f"Error: {exc}"),
                 0.0,
                 {
                     "status": "error",
                     "error": "invalid_include_details",
                 },
             )
-        include_details = bool(include_details_raw)
+        try:
+            mode = _coerce_mode(parameters.get("mode"))
+        except ValueError as exc:
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "invalid_mode"}
+        if mode == "summary" and include_details:
+            return (
+                ToolResponse(text="Error: include_details is unavailable in summary mode; use mode='cells'."),
+                0.0,
+                {"status": "error", "error": "invalid_mode"},
+            )
         try:
             from openpyxl.utils.cell import range_boundaries
         except ImportError:
@@ -2065,7 +2455,7 @@ class InspectRangeTool(BaseTool):
         )
         if file_path is None:
             attempted_display: list[str] = []
-            root = get_sheet_arena_data_root() / "_workspaces" / workspace_id
+            root = get_spreadsheet_rl_data_root() / "_workspaces" / workspace_id
             for p in attempted:
                 try:
                     attempted_display.append(str(p.relative_to(root)))
@@ -2158,6 +2548,18 @@ class InspectRangeTool(BaseTool):
                         },
                     )
 
+            if mode == "summary" and _total_cell_count > self.max_summary_cells:
+                return (
+                    ToolResponse(
+                        text=(
+                            "Error: summary request is too large "
+                            f"(cells={_total_cell_count} > {self.max_summary_cells}); narrow the ranges."
+                        )
+                    ),
+                    0.0,
+                    {"status": "error", "error": "range_too_large"},
+                )
+
             if len(range_tokens) == 1:
                 payload, metrics = await asyncio.to_thread(
                     _inspect_range_sync,
@@ -2165,8 +2567,10 @@ class InspectRangeTool(BaseTool):
                     display_file=str(relpath),
                     range_token=range_tokens[0],
                     max_cells=self.max_cells,
+                    max_summary_cells=self.max_summary_cells,
                     max_cf_rules=self.max_cf_rules,
                     include_details=include_details,
+                    mode=mode,
                     max_response_chars=self.max_response_chars,
                 )
             else:
@@ -2176,8 +2580,10 @@ class InspectRangeTool(BaseTool):
                     display_file=str(relpath),
                     range_tokens=range_tokens,
                     max_cells=self.max_cells,
+                    max_summary_cells=self.max_summary_cells,
                     max_cf_rules=self.max_cf_rules,
                     include_details=include_details,
+                    mode=mode,
                     max_response_chars=self.max_response_chars,
                 )
                 if len(range_payloads) == 1:
@@ -2207,8 +2613,11 @@ class InspectRangeTool(BaseTool):
                         "returned_cells": int(sum(item.get("returned_cells", 0) for item in range_metrics)),
                         "truncated": any(bool(item.get("truncated")) for item in range_metrics),
                         "include_details": include_details,
+                        "mode": mode,
                     }
                     _trim_multi_range_payload(payload, metrics, max_response_chars=self.max_response_chars)
+        except _SummaryRangeTooLargeError as exc:
+            return ToolResponse(text=f"Error: {exc}"), 0.0, {"status": "error", "error": "range_too_large"}
         except asyncio.CancelledError:
             raise
         except Exception as exc:

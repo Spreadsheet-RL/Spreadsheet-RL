@@ -285,7 +285,7 @@ class Qwen3XMLToolParser(ToolParser):
                             f"via safe literal parser for tool '{func_name}', degenerating to string."
                         )
                         return raw_value
-                    if isinstance(parsed_value, (dict, list, str, int, float, bool)) or parsed_value is None:
+                    if isinstance(parsed_value, dict | list | str | int | float | bool) or parsed_value is None:
                         return parsed_value
                     return raw_value
 
@@ -301,8 +301,13 @@ class Qwen3XMLToolParser(ToolParser):
                     )
                 return param_value
 
-            if isinstance(param_config[param_name], dict) and "type" in param_config[param_name]:
-                param_type = str(param_config[param_name]["type"]).strip().lower()
+            raw_param_type = None
+            if isinstance(param_config[param_name], dict):
+                raw_param_type = param_config[param_name].get("type")
+            if isinstance(raw_param_type, list):
+                return parse_json_scalar_with_fallback(param_value)
+            if raw_param_type is not None:
+                param_type = str(raw_param_type).strip().lower()
             else:
                 param_type = "string"
             if param_type in ["string", "str", "text", "varchar", "char", "enum"]:
@@ -432,11 +437,13 @@ class Qwen3XMLToolParser(ToolParser):
                     if parameter_match is None:
                         if model_output.startswith("<parameter=", pos):
                             return [], (
-                                "Tool call parse error: invalid XML parameter tag inside '<function=...>...</function>'. "
+                                "Tool call parse error: invalid XML parameter tag inside "
+                                "'<function=...>...</function>'. "
                                 "Use '<parameter=name>value</parameter>'."
                             )
                         return [], (
-                            "Tool call parse error: invalid XML function content inside '<function=...>...</function>'. "
+                            "Tool call parse error: invalid XML function content inside "
+                            "'<function=...>...</function>'. "
                             "Expected '<parameter=...>' or '</function>'."
                         )
 
@@ -445,7 +452,8 @@ class Qwen3XMLToolParser(ToolParser):
                     value_end = model_output.find("</parameter>", value_start)
                     if value_end < 0:
                         return [], (
-                            "Tool call parse error: unbalanced XML parameter tags inside '<function=...>...</function>' "
+                            "Tool call parse error: unbalanced XML parameter tags inside "
+                            "'<function=...>...</function>' "
                             "(missing '</parameter>')."
                         )
 

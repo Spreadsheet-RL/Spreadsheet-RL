@@ -24,12 +24,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
+from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
 from .response_format import records_to_csv
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .worksheet_resolution import resolve_worksheet as _resolve_target_worksheet
 
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
@@ -96,6 +97,29 @@ def _error_tool_response(error: str, message: str) -> tuple[ToolResponse, float,
     )
 
 
+def _coerce_bool_parameter(value: Any, *, parameter: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().casefold()
+        if token == "true":
+            return True
+        if token == "false":
+            return False
+    raise ValueError(f"{parameter} received {value!r}; pass true or false.")
+
+
+def _coerce_int_parameter(value: Any, *, parameter: str, default: int) -> int:
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        raise ValueError(f"{parameter} received {value!r}; pass an integer.")
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ValueError(f"{parameter} received {value!r}; pass an integer.") from None
+
+
 def _truncate_str(value: str, max_chars: int) -> str:
     if max_chars <= 0:
         return ""
@@ -135,16 +159,18 @@ def _sanitize_relpath(value: Any) -> Optional[Path]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(' \t\n\r\f\v"')
-    if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
-        name = name[1:-1].replace("''", "'")
-        return name.strip()
+    name = value.strip('\t\n\r\f\v"')
+    quoted = name.strip()
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return quoted[1:-1]
 
-    if name.startswith("'") and not name.endswith("'"):
-        name = name[1:]
-    elif name.endswith("'") and not name.startswith("'"):
-        name = name[:-1]
-    return name.strip()
+    if quoted.startswith("'") and not quoted.endswith("'"):
+        return quoted[1:]
+    if quoted.endswith("'") and not quoted.startswith("'"):
+        return quoted[:-1]
+    return name.strip("\t\n\r\f\v")
 
 
 def _normalize_cell_range(value: str) -> str:
@@ -157,7 +183,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_sheet_arena_data_root()
+    workspace_base = get_spreadsheet_rl_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -399,26 +425,6 @@ def _fit_matches_csv_payload(
         minimal["truncation_reasons"].append("values_omitted")
     _set_matches_csv(minimal, first_match, include_values=False, search_in=search_in)
     return _fit_success_payload_to_max_chars(minimal, max_response_chars)
-
-
-def _resolve_target_worksheet(wb, requested_name: str):
-    worksheets = getattr(wb, "worksheets", None) or []
-    for ws in worksheets:
-        if getattr(ws, "title", None) == requested_name:
-            return ws
-
-    requested_cf = requested_name.casefold()
-    matches = [ws for ws in worksheets if getattr(ws, "title", "").casefold() == requested_cf]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        candidates = ", ".join(repr(getattr(ws, "title", "")) for ws in matches[:5])
-        raise RuntimeError(f"ambiguous sheet name: {requested_name!r} matches {candidates}")
-
-    sheetnames = getattr(wb, "sheetnames", None) or []
-    if any(isinstance(name, str) and name.casefold() == requested_cf for name in sheetnames):
-        raise RuntimeError(f"sheet is not a worksheet: {requested_name!r}")
-    raise RuntimeError(f"sheet not found: {requested_name!r}")
 
 
 def _scan_zip_metadata(
@@ -1474,7 +1480,10 @@ class FindCellsTool(BaseTool):
 
         query_raw = parameters.get("query")
         if not isinstance(query_raw, str) or not query_raw.strip():
-            return _error_tool_response("invalid_query", "query must be a non-empty string.")
+            return _error_tool_response(
+                "invalid_query",
+                "query received empty; pass the text to search for (e.g. a header name).",
+            )
         query = query_raw.strip()
 
         try:
@@ -1495,25 +1504,30 @@ class FindCellsTool(BaseTool):
             if regex_error:
                 return _error_tool_response("invalid_query", regex_error)
 
-        case_sensitive_raw = parameters.get("case_sensitive", False)
-        if not isinstance(case_sensitive_raw, bool):
-            return _error_tool_response("invalid_case_sensitive", "case_sensitive must be a boolean.")
-        case_sensitive = bool(case_sensitive_raw)
+        try:
+            case_sensitive = _coerce_bool_parameter(
+                parameters.get("case_sensitive", False),
+                parameter="case_sensitive",
+            )
+        except ValueError as exc:
+            return _error_tool_response("invalid_case_sensitive", str(exc))
 
-        include_values_raw = parameters.get("include_values", False)
-        if not isinstance(include_values_raw, bool):
-            return _error_tool_response("invalid_include_values", "include_values must be a boolean.")
-        include_values = bool(include_values_raw)
+        try:
+            include_values = _coerce_bool_parameter(
+                parameters.get("include_values", False),
+                parameter="include_values",
+            )
+        except ValueError as exc:
+            return _error_tool_response("invalid_include_values", str(exc))
 
         search_range = parameters.get("range")
         if search_range is not None and (not isinstance(search_range, str) or not search_range.strip()):
             return _error_tool_response("invalid_range", "range must be a non-empty string if provided.")
 
-        max_results_raw = parameters.get("max_results", 20)
         try:
-            max_results = int(max_results_raw)
-        except (TypeError, ValueError):
-            max_results = 20
+            max_results = _coerce_int_parameter(parameters.get("max_results"), parameter="max_results", default=20)
+        except ValueError as exc:
+            return _error_tool_response("invalid_max_results", str(exc))
         max_results = min(max(1, max_results), 1000)
 
         workspace_id = normalize_workspace_id(kwargs.get("workspace_id"))

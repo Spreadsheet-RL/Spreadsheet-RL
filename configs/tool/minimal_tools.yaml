@@ -1,7 +1,8 @@
 tools:
   - class_name: "verl.tools.recalculate.RecalculateAndReadTool"
     config:
-      recalc_url: "${oc.env:SHEET_ARENA_RECALC_URL,http://127.0.0.1:5000/recalculate}"
+      parallel_safe: false
+      recalc_url: "${oc.env:SPREADSHEET_RL_RECALC_URL,http://127.0.0.1:5000/recalculate}"
       timeout_s: 180
       max_file_size_mb: 100
       max_response_chars: 4096
@@ -11,22 +12,23 @@ tools:
       type: "function"
       function:
         name: "recalculate_and_read"
-        description: "Recalculate a workbook in Excel (remote service), attempt to overwrite the workbook file, and return values preserving the requested shape. Returns updated/values_source (and writeback_error on failure). Small ranges return top_left + addresses + values matrices; large ranges are sampled as cells with addresses."
+        description: "Recalculate the workbook in Excel, save it when safe, and read requested ranges. Small ranges preserve matrix shape; large ranges return addressed samples. Reports updated, values_source, and any writeback_error."
         parameters:
           type: "object"
           properties:
             path:
               type: "string"
-              description: "Optional relative path to the workbook file (e.g. data.xlsx). Defaults to data.xlsx in the workspace."
+              description: "Relative workbook path; omit for data.xlsx."
             cell_ranges:
               type: "array"
-              description: "List of A1 cell ranges to read from the recalculated workbook (e.g. ['A1', 'Sheet1!B2:C3'])."
+              description: "A1 ranges to read after recalculation."
               items:
                 type: "string"
           required: ["cell_ranges"]
 
   - class_name: "verl.tools.sandbox_fusion_tools.SandboxFusionTool"
     config:
+      parallel_safe: false
       # Prefer an environment-provided endpoint (e.g. set by SLURM), fallback to the public template URL.
       sandbox_fusion_url: "${oc.env:SANDBOX_FUSION_URL,http://127.0.0.1:8080/run_code}"
       num_workers: 4

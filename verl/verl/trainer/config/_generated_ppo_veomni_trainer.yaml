@@ -261,6 +261,7 @@ actor_rollout_ref:
       tool_config_path: null
       max_user_turns: null
       max_parallel_calls: 1
+      max_serial_calls: null
       max_tool_response_length: 256
       tool_response_truncate_side: middle
       use_inference_chat_template: false

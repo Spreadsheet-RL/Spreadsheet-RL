@@ -31,6 +31,7 @@ from verl.experimental.agent_loop.agent_loop import (
     AgentLoopOutput,
     register,
 )
+from verl.experimental.agent_loop.tool_execution import execute_tool_calls, partition_tool_calls
 from verl.experimental.agent_loop.tool_parser import TOOL_PARSER_ERROR_FUNCTION_NAME, FunctionCall, ToolParser
 from verl.experimental.agent_loop.utils import build_gpt_oss_tool_response_text
 from verl.tools.schemas import ToolResponse
@@ -336,6 +337,9 @@ class ToolAgentLoop(AgentLoopBase):
         self.max_user_turns = self.rollout_config.multi_turn.max_user_turns
         self.max_assistant_turns = self.rollout_config.multi_turn.max_assistant_turns
         self.max_parallel_calls = self.rollout_config.multi_turn.max_parallel_calls
+        self.max_serial_calls = self.rollout_config.multi_turn.max_serial_calls
+        if self.max_serial_calls is not None and self.max_serial_calls < 1:
+            raise ValueError("max_serial_calls must be null or at least 1")
         self.max_tool_response_length = self.rollout_config.multi_turn.max_tool_response_length
         self.tool_response_truncate_side = self.rollout_config.multi_turn.tool_response_truncate_side
         tool_config_path = self.rollout_config.multi_turn.tool_config_path
@@ -533,14 +537,43 @@ class ToolAgentLoop(AgentLoopBase):
         add_messages: list[dict[str, Any]] = []
         new_images_this_turn: list[Any] = []  # Local variable instead of agent_data attribute
 
-        tasks = []
-        tool_call_names = []
-        for tool_call in agent_data.tool_calls[: self.max_parallel_calls]:
-            tasks.append(self._call_tool(tool_call, agent_data.tools_kwargs, agent_data))
-            tool_call_names.append(tool_call.name)
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        tool_calls, serial_overflow_tool_calls, parallel_overflow_tool_calls = partition_tool_calls(
+            agent_data.tool_calls,
+            active_tools=active_tools,
+            max_parallel_calls=self.max_parallel_calls,
+            max_serial_calls=self.max_serial_calls,
+        )
+        tool_call_names = [tool_call.name for tool_call in agent_data.tool_calls]
 
         with simple_timer("tool_calls", agent_data.metrics):
-            responses = await asyncio.gather(*tasks)
+            responses = await self._execute_tool_calls(tool_calls, agent_data.tools_kwargs, agent_data)
+        if serial_overflow_tool_calls:
+            message = (
+                "Error: tool call not executed because this turn contains write-capable tools and "
+                f"max_serial_calls={self.max_serial_calls}. Submit remaining independent calls in a later turn."
+            )
+            responses.extend(
+                (
+                    ToolResponse(text=message),
+                    0.0,
+                    {"status": "error", "error": "serial_call_limit_exceeded", "executed": False},
+                )
+                for _tool_call in serial_overflow_tool_calls
+            )
+        if parallel_overflow_tool_calls:
+            message = (
+                f"Error: tool call not executed because max_parallel_calls={self.max_parallel_calls}. "
+                "Submit remaining calls in a later turn."
+            )
+            responses.extend(
+                (
+                    ToolResponse(text=message),
+                    0.0,
+                    {"status": "error", "error": "parallel_call_limit_exceeded", "executed": False},
+                )
+                for _tool_call in parallel_overflow_tool_calls
+            )
 
         # Process tool responses and update multi_modal_data
         # Removed: agent_data.new_images_this_turn = []
@@ -630,6 +663,19 @@ class ToolAgentLoop(AgentLoopBase):
             agent_data.response_logprobs += [0.0] * len(response_ids)
         agent_data.user_turns += 1
         return AgentState.GENERATING
+
+    async def _execute_tool_calls(
+        self,
+        tool_calls: list[FunctionCall],
+        tools_kwargs: dict[str, Any],
+        agent_data: AgentData,
+    ) -> list[tuple[ToolResponse, float | None, dict]]:
+        active_tools = getattr(agent_data, "_active_tools", self.tools)
+        return await execute_tool_calls(
+            tool_calls,
+            active_tools=active_tools,
+            call_tool=lambda tool_call: self._call_tool(tool_call, tools_kwargs, agent_data),
+        )
 
     async def _call_tool(
         self, tool_call: FunctionCall, tools_kwargs: dict[str, Any], agent_data: AgentData

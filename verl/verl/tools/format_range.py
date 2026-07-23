@@ -32,6 +32,10 @@ from .clear_range import (
 )
 from .recalculate import _file_signature
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .workbook_formula_cache import (
+    _collect_formula_cached_values_from_xlsx,
+    _restore_formula_cached_values_in_xlsx,
+)
 
 _A1_CELL_RE = r"[A-Z]{1,3}[0-9]{1,7}"
 _A1_RECT_RANGE_RE = re.compile(rf"^{_A1_CELL_RE}(?::{_A1_CELL_RE})?$")
@@ -39,6 +43,43 @@ _COLOR_RE = re.compile(r"^#?(?:[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$")
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
 _MAX_NUMBER_FORMAT_CHARS = 255
+_COMMON_COLORS = {
+    "black": "FF000000",
+    "white": "FFFFFFFF",
+    "red": "FFFF0000",
+    "green": "FF008000",
+    "blue": "FF0000FF",
+    "yellow": "FFFFFF00",
+    "orange": "FFFFA500",
+    "purple": "FF800080",
+    "pink": "FFFFC0CB",
+    "brown": "FFA52A2A",
+    "gray": "FF808080",
+    "grey": "FF808080",
+    "lightgray": "FFD3D3D3",
+    "lightgrey": "FFD3D3D3",
+    "lightblue": "FFADD8E6",
+    "lightgreen": "FF90EE90",
+    "lightyellow": "FFFFFFE0",
+}
+_FORMAT_OPTION_NAMES = (
+    "fill_color",
+    "font_color",
+    "bold",
+    "italic",
+    "underline",
+    "number_format",
+    "horizontal_alignment",
+    "vertical_alignment",
+    "wrap_text",
+    "shrink_to_fit",
+    "text_rotation",
+    "border_style",
+    "border_color",
+    "row_height",
+    "column_width",
+)
+_FORMAT_PARAMETER_NAMES = frozenset(("path", "sheet_name", "range", *_FORMAT_OPTION_NAMES))
 
 _HORIZONTAL_ALIGNMENTS = {
     "general",
@@ -74,95 +115,6 @@ class _FormatOptionError(ValueError):
         self.code = code
 
 
-def _default_tool_schema() -> OpenAIFunctionToolSchema:
-    return OpenAIFunctionToolSchema.model_validate(
-        {
-            "type": "function",
-            "function": {
-                "name": "format_range",
-                "description": (
-                    "Apply common formatting to a finite A1 cell range in an .xlsx workbook. Supports fill color, "
-                    "font color, bold, italic, underline, number_format, alignment, border style/color, row height, "
-                    "and column width. Does not recalculate formulas."
-                ),
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Optional relative path to the workbook file. Defaults to data.xlsx.",
-                        },
-                        "sheet_name": {
-                            "type": "string",
-                            "description": "Optional worksheet name. If range includes a sheet name, it must match.",
-                        },
-                        "range": {
-                            "type": "string",
-                            "description": "Finite A1 cell range to format, e.g. A1:C3 or Sheet1!B2:D10.",
-                        },
-                        "fill_color": {
-                            "type": "string",
-                            "description": "Cell fill/background color as #RRGGBB, RRGGBB, or AARRGGBB.",
-                        },
-                        "background_color": {
-                            "type": "string",
-                            "description": "Alias for fill_color.",
-                        },
-                        "font_color": {
-                            "type": "string",
-                            "description": "Font color as #RRGGBB, RRGGBB, or AARRGGBB.",
-                        },
-                        "bold": {"type": "boolean", "description": "Set font bold on or off."},
-                        "italic": {"type": "boolean", "description": "Set font italic on or off."},
-                        "underline": {"type": "boolean", "description": "Set single underline on or off."},
-                        "number_format": {
-                            "type": "string",
-                            "description": "Excel number format code, e.g. $#,##0.00 or 0.0%.",
-                        },
-                        "alignment": {
-                            "type": "object",
-                            "description": (
-                                "Optional alignment object with horizontal, vertical, wrap_text, shrink_to_fit, "
-                                "or text_rotation."
-                            ),
-                        },
-                        "horizontal_alignment": {
-                            "type": "string",
-                            "description": "Horizontal alignment, e.g. left, center, right, or general.",
-                        },
-                        "vertical_alignment": {
-                            "type": "string",
-                            "description": "Vertical alignment, e.g. top, center, bottom.",
-                        },
-                        "wrap_text": {"type": "boolean", "description": "Set text wrapping on or off."},
-                        "text_rotation": {
-                            "type": "integer",
-                            "description": "Text rotation from 0 to 180, or 255 for stacked text.",
-                        },
-                        "border_style": {
-                            "type": "string",
-                            "description": "Border style for all sides, e.g. thin, medium, thick, dashed, dotted.",
-                        },
-                        "border_color": {
-                            "type": "string",
-                            "description": "Border color as #RRGGBB, RRGGBB, or AARRGGBB.",
-                        },
-                        "row_height": {
-                            "type": "number",
-                            "description": "Optional row height applied to rows touched by the range.",
-                        },
-                        "column_width": {
-                            "type": "number",
-                            "description": "Optional column width applied to columns touched by the range.",
-                        },
-                    },
-                    "required": ["range"],
-                },
-            },
-        }
-    )
-
-
 def _error_response(error: str, message: str, **extra: Any) -> tuple[ToolResponse, float, dict[str, Any]]:
     payload = {"status": "error", "error": error, "message": message, "truncated": False}
     payload.update(extra)
@@ -172,93 +124,97 @@ def _error_response(error: str, message: str, **extra: Any) -> tuple[ToolRespons
 
 def _normalize_color(value: Any, *, field_name: str) -> str:
     if not isinstance(value, str) or not value.strip():
-        raise _FormatOptionError("invalid_color", f"{field_name} must be a hex color like #RRGGBB.")
+        raise _FormatOptionError(
+            "invalid_color",
+            f"{field_name} must be a hex color like #RRGGBB or a common color name like red.",
+        )
     token = value.strip()
+    color_name = token.casefold().replace(" ", "")
+    if color_name in _COMMON_COLORS:
+        return _COMMON_COLORS[color_name]
     if not _COLOR_RE.fullmatch(token):
-        raise _FormatOptionError("invalid_color", f"{field_name} must be a hex color like #RRGGBB.")
+        raise _FormatOptionError(
+            "invalid_color",
+            f"{field_name} must be a hex color like #RRGGBB or a common color name like red.",
+        )
     hex_value = token.lstrip("#").upper()
     if len(hex_value) == 6:
         return f"FF{hex_value}"
     return hex_value
 
 
+def _coerce_bool_option(value: Any, *, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        token = value.strip().casefold()
+        if token == "true":
+            return True
+        if token == "false":
+            return False
+    raise _FormatOptionError(f"invalid_{field_name}", f"{field_name} must be a boolean.")
+
+
 def _parse_bool_option(parameters: dict[str, Any], key: str) -> Optional[bool]:
     if key not in parameters or parameters.get(key) is None:
         return None
-    value = parameters.get(key)
-    if not isinstance(value, bool):
-        raise _FormatOptionError(f"invalid_{key}", f"{key} must be a boolean.")
-    return value
+    return _coerce_bool_option(parameters.get(key), field_name=key)
 
 
 def _parse_number_option(parameters: dict[str, Any], key: str, *, minimum: float, maximum: float) -> Optional[float]:
     if key not in parameters or parameters.get(key) is None:
         return None
     value = parameters.get(key)
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         raise _FormatOptionError(f"invalid_{key}", f"{key} must be a number.")
-    number = float(value)
+    if isinstance(value, str):
+        value = value.strip()
+    if not isinstance(value, int | float | str) or value == "":
+        raise _FormatOptionError(f"invalid_{key}", f"{key} must be a number.")
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise _FormatOptionError(f"invalid_{key}", f"{key} must be a number.") from None
     if not minimum <= number <= maximum:
         raise _FormatOptionError(f"invalid_{key}", f"{key} must be between {minimum:g} and {maximum:g}.")
     return number
 
 
-def _merge_alignment_value(
-    alignment: dict[str, Any],
-    *,
-    key: str,
-    value: Any,
-    source: str,
-) -> None:
-    if value is None:
-        return
-    if key in alignment and alignment[key] != value:
-        raise _FormatOptionError(
-            "invalid_alignment",
-            f"conflicting alignment option for {key}: alignment.{key} and {source}.",
-        )
-    alignment[key] = value
+def _coerce_int_option(value: Any, *, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise _FormatOptionError("invalid_alignment", f"{field_name} must be an integer.")
+    if isinstance(value, str):
+        value = value.strip()
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise _FormatOptionError("invalid_alignment", f"{field_name} must be an integer.") from None
+    if not number.is_integer():
+        raise _FormatOptionError("invalid_alignment", f"{field_name} must be an integer.")
+    return int(number)
 
 
 def _parse_alignment_options(parameters: dict[str, Any]) -> dict[str, Any]:
     alignment: dict[str, Any] = {}
-    raw_alignment = parameters.get("alignment")
-    if raw_alignment is not None:
-        if not isinstance(raw_alignment, dict):
-            raise _FormatOptionError("invalid_alignment", "alignment must be an object.")
-        allowed = {"horizontal", "vertical", "wrap_text", "shrink_to_fit", "text_rotation"}
-        unknown = sorted(str(key) for key in raw_alignment if key not in allowed)
-        if unknown:
-            raise _FormatOptionError("invalid_alignment", f"unsupported alignment keys: {', '.join(unknown)}.")
-        for key in allowed:
-            if key in raw_alignment:
-                alignment[key] = raw_alignment[key]
-
     horizontal = parameters.get("horizontal_alignment")
     if horizontal is not None:
-        _merge_alignment_value(alignment, key="horizontal", value=horizontal, source="horizontal_alignment")
+        alignment["horizontal"] = horizontal
 
     vertical = parameters.get("vertical_alignment")
     if vertical is not None:
-        _merge_alignment_value(alignment, key="vertical", value=vertical, source="vertical_alignment")
+        alignment["vertical"] = vertical
 
-    if "wrap_text" in parameters:
-        wrap_text = _parse_bool_option(parameters, "wrap_text")
-        _merge_alignment_value(alignment, key="wrap_text", value=wrap_text, source="wrap_text")
+    wrap_text = _parse_bool_option(parameters, "wrap_text")
+    if wrap_text is not None:
+        alignment["wrap_text"] = wrap_text
 
-    if "text_rotation" in parameters:
-        text_rotation_raw = parameters.get("text_rotation")
-        if isinstance(text_rotation_raw, bool):
-            raise _FormatOptionError("invalid_alignment", "text_rotation must be an integer.")
-        try:
-            text_rotation = int(text_rotation_raw)
-        except (TypeError, ValueError):
-            raise _FormatOptionError("invalid_alignment", "text_rotation must be an integer.") from None
-        _merge_alignment_value(alignment, key="text_rotation", value=text_rotation, source="text_rotation")
+    text_rotation = parameters.get("text_rotation")
+    if text_rotation is not None:
+        alignment["text_rotation"] = _coerce_int_option(text_rotation, field_name="text_rotation")
 
-    if "shrink_to_fit" in parameters:
-        shrink_to_fit = _parse_bool_option(parameters, "shrink_to_fit")
-        _merge_alignment_value(alignment, key="shrink_to_fit", value=shrink_to_fit, source="shrink_to_fit")
+    shrink_to_fit = _parse_bool_option(parameters, "shrink_to_fit")
+    if shrink_to_fit is not None:
+        alignment["shrink_to_fit"] = shrink_to_fit
 
     if not alignment:
         return {}
@@ -275,35 +231,27 @@ def _parse_alignment_options(parameters: dict[str, Any]) -> dict[str, Any]:
             allowed = ", ".join(sorted(_VERTICAL_ALIGNMENTS))
             raise _FormatOptionError("invalid_alignment", f"vertical alignment must be one of: {allowed}.")
 
-    for key in ("wrap_text", "shrink_to_fit"):
-        if key in alignment and not isinstance(alignment[key], bool):
-            raise _FormatOptionError("invalid_alignment", f"alignment.{key} must be a boolean.")
-
     if "text_rotation" in alignment:
         text_rotation = alignment["text_rotation"]
-        if isinstance(text_rotation, bool) or not isinstance(text_rotation, int):
-            raise _FormatOptionError("invalid_alignment", "alignment.text_rotation must be an integer.")
         if text_rotation != 255 and not 0 <= text_rotation <= 180:
-            raise _FormatOptionError("invalid_alignment", "alignment.text_rotation must be 0-180 or 255.")
+            raise _FormatOptionError("invalid_alignment", "text_rotation must be 0-180 or 255.")
 
     return alignment
 
 
 def _parse_format_options(parameters: dict[str, Any]) -> dict[str, Any]:
+    unknown = sorted(str(key) for key in parameters if key not in _FORMAT_PARAMETER_NAMES)
+    if unknown:
+        raise _FormatOptionError(
+            "unsupported_format_parameter",
+            f"unsupported format parameter(s): {', '.join(unknown)}.",
+        )
+
     options: dict[str, Any] = {}
 
     fill_color_raw = parameters.get("fill_color")
-    background_color_raw = parameters.get("background_color")
-    if fill_color_raw is not None and background_color_raw is not None:
-        fill_color = _normalize_color(fill_color_raw, field_name="fill_color")
-        background_color = _normalize_color(background_color_raw, field_name="background_color")
-        if fill_color != background_color:
-            raise _FormatOptionError("invalid_color", "fill_color and background_color conflict.")
-        options["fill_color"] = fill_color
-    elif fill_color_raw is not None:
+    if fill_color_raw is not None:
         options["fill_color"] = _normalize_color(fill_color_raw, field_name="fill_color")
-    elif background_color_raw is not None:
-        options["fill_color"] = _normalize_color(background_color_raw, field_name="background_color")
 
     if parameters.get("font_color") is not None:
         options["font_color"] = _normalize_color(parameters.get("font_color"), field_name="font_color")
@@ -349,7 +297,10 @@ def _parse_format_options(parameters: dict[str, Any]) -> dict[str, Any]:
         options["column_width"] = column_width
 
     if not options:
-        raise _FormatOptionError("no_format_options", "provide at least one formatting option.")
+        raise _FormatOptionError(
+            "no_format_options",
+            f"provide at least one formatting option: {', '.join(_FORMAT_OPTION_NAMES)}.",
+        )
     return options
 
 
@@ -652,9 +603,7 @@ def _apply_cell_format(cell: Any, options: dict[str, Any]) -> None:
         current = copy.copy(cell.alignment)
         alignment = Alignment(
             horizontal=(
-                alignment_kwargs["horizontal"]
-                if alignment_kwargs["horizontal"] is not None
-                else current.horizontal
+                alignment_kwargs["horizontal"] if alignment_kwargs["horizontal"] is not None else current.horizontal
             ),
             vertical=alignment_kwargs["vertical"] if alignment_kwargs["vertical"] is not None else current.vertical,
             text_rotation=(
@@ -700,7 +649,7 @@ def _format_temp_workbook(
     range_token: str,
     options: dict[str, Any],
     max_format_cells: int,
-) -> tuple[str, str, int, list[dict[str, Any]], int, int, int]:
+) -> tuple[str, str, int, list[dict[str, Any]], int, int, int, bool]:
     try:
         from openpyxl import load_workbook
         from openpyxl.cell.cell import MergedCell
@@ -710,6 +659,7 @@ def _format_temp_workbook(
 
     wb = None
     try:
+        cached_formula_values = _collect_formula_cached_values_from_xlsx(tmp_path)
         wb = load_workbook(filename=str(tmp_path), keep_vba=False, data_only=False, keep_links=True)
         worksheets = getattr(wb, "worksheets", None) or []
         if not worksheets:
@@ -808,6 +758,11 @@ def _format_temp_workbook(
             )
 
         wb.save(str(tmp_path))
+        formula_cache_preserved = True
+        try:
+            _restore_formula_cached_values_in_xlsx(tmp_path, cached_formula_values)
+        except Exception:
+            formula_cache_preserved = False
         _validate_workbook_loadable(tmp_path)
         return (
             resolved_sheet_name,
@@ -817,6 +772,7 @@ def _format_temp_workbook(
             total_rows,
             total_cols,
             skipped_merged_cells,
+            formula_cache_preserved,
         )
     finally:
         if wb is not None:
@@ -827,8 +783,8 @@ def _format_temp_workbook(
 
 
 class FormatRangeTool(BaseTool):
-    def __init__(self, config: dict, tool_schema: Optional[OpenAIFunctionToolSchema]):
-        super().__init__(config, tool_schema or _default_tool_schema())
+    def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
+        super().__init__(config, tool_schema)
         self._instance_dict: dict[str, dict[str, Any]] = {}
 
         max_file_size_mb_raw = config.get("max_file_size_mb", config.get("max_file_mb", 100))
@@ -936,6 +892,7 @@ class FormatRangeTool(BaseTool):
                 formatted_rows,
                 formatted_columns,
                 skipped_merged_cells,
+                formula_cache_preserved,
             ) = await asyncio.to_thread(
                 _format_temp_workbook,
                 tmp_path=tmp_path,
@@ -977,6 +934,8 @@ class FormatRangeTool(BaseTool):
             "sample_formats": samples,
             "truncated": False,
         }
+        if not formula_cache_preserved:
+            payload["formula_cache_preserved"] = False
         response_text = _truncate_success_payload_to_max_chars(payload, self.max_response_chars)
 
         metrics = {
@@ -988,6 +947,8 @@ class FormatRangeTool(BaseTool):
             "skipped_merged_cells": skipped_merged_cells,
             "truncated": bool(payload.get("truncated")),
         }
+        if not formula_cache_preserved:
+            metrics["formula_cache_preserved"] = False
         return ToolResponse(text=response_text), 0.0, metrics
 
     async def calc_reward(self, instance_id: str, **kwargs) -> float:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-
+from typing import Any
 
 _FUTURE_FUNCTION_PREFIXES = {
     "FILTER": "_xlfn._xlws.",
@@ -38,6 +38,24 @@ _FUTURE_FUNCTION_PREFIXES = {
 
 _IDENT_RE = re.compile(r"[A-Za-z_\\][A-Za-z0-9_.]*")
 _LAMBDA_PARAM_RE = re.compile(r"(\s*)(?:_xlpm\.)?([A-Za-z_\\][A-Za-z0-9_]*)\s*", re.IGNORECASE)
+_DELIMITER_PAIRS = {"(": ")", "{": "}"}
+_CLOSING_DELIMITERS = {closing: opening for opening, closing in _DELIMITER_PAIRS.items()}
+_SPILL_OPERATOR_RE = re.compile(r"(?<=[A-Za-z0-9_)\]])#")
+_FUNCTION_ARITY_BOUNDS = {
+    "COUNTIF": (2, 2),
+    "COUNTIFS": (2, 254),
+    "LOOKUP": (2, 3),
+    "NETWORKDAYS": (2, 3),
+    "QUOTIENT": (2, 2),
+    "SUMIF": (2, 3),
+    "SUMIFS": (3, 255),
+    "WORKDAY": (2, 3),
+}
+_FUNCTION_ARGUMENT_PARITY = {
+    "COUNTIFS": 0,
+    "SUMIFS": 1,
+}
+_REFERENCE_RETURNING_FUNCTIONS = frozenset({"CHOOSE", "INDEX", "INDIRECT", "OFFSET", "XLOOKUP"})
 
 
 def _is_identifier_char(ch: str) -> bool:
@@ -432,15 +450,273 @@ def normalize_formula_for_excel(formula: str) -> str:
     return _normalize_future_functions(formula)
 
 
+def _formula_syntax_error(position: int, detail: str) -> ValueError:
+    return ValueError(f"formula syntax invalid at position {position}: {detail}")
+
+
+def _validate_formula_delimiters(formula: str) -> None:
+    stack: list[tuple[str, int]] = []
+    quote: str | None = None
+    quote_start = 0
+    i = 0
+    while i < len(formula):
+        ch = formula[i]
+        if quote is not None:
+            if ch == quote:
+                if i + 1 < len(formula) and formula[i + 1] == quote:
+                    i += 2
+                    continue
+                quote = None
+            i += 1
+            continue
+
+        if ch == "[":
+            bracketed, bracket_end = _copy_bracketed(formula, i)
+            if not bracketed.endswith("]"):
+                raise _formula_syntax_error(i + 1, "unclosed '['")
+            i = bracket_end
+            continue
+        if ch in {'"', "'"}:
+            quote = ch
+            quote_start = i
+        elif ch in _DELIMITER_PAIRS:
+            stack.append((ch, i))
+        elif ch in _CLOSING_DELIMITERS:
+            expected_open = _CLOSING_DELIMITERS[ch]
+            if not stack:
+                raise _formula_syntax_error(i + 1, f"unexpected {ch!r}")
+            opening, opening_position = stack[-1]
+            if opening != expected_open:
+                expected_close = _DELIMITER_PAIRS[opening]
+                raise _formula_syntax_error(
+                    i + 1,
+                    f"expected {expected_close!r} to close {opening!r} at position {opening_position + 1}",
+                )
+            stack.pop()
+        i += 1
+
+    if quote is not None:
+        quote_name = "double quote" if quote == '"' else "single quote"
+        raise _formula_syntax_error(quote_start + 1, f"unclosed {quote_name}")
+    if stack:
+        opening, opening_position = stack[-1]
+        raise _formula_syntax_error(opening_position + 1, f"unclosed {opening!r}")
+
+
+def _token_positions(formula: str, tokens) -> list[int]:
+    positions: list[int] = []
+    cursor = 1 if formula.startswith("=") else 0
+    for token in tokens:
+        value = token.value
+        position = formula.find(value, cursor)
+        if position < 0:
+            position = cursor
+        positions.append(position)
+        cursor = position + len(value)
+    return positions
+
+
+def _function_name_from_token(token_value: str) -> str:
+    raw_name = token_value.rstrip("(").rsplit(":", 1)[-1]
+    return raw_name.rsplit(".", 1)[-1].upper()
+
+
+def _matching_open_token_index(positioned: list[tuple[Any, int]], close_index: int) -> int | None:
+    depth = 0
+    for index in range(close_index, -1, -1):
+        token = positioned[index][0]
+        if token.subtype == "CLOSE":
+            depth += 1
+        elif token.subtype == "OPEN":
+            depth -= 1
+            if depth == 0:
+                return index
+    return None
+
+
+def _closed_expression_returns_reference(positioned: list[tuple[Any, int]], close_index: int) -> bool:
+    open_index = _matching_open_token_index(positioned, close_index)
+    if open_index is None:
+        return False
+
+    opening = positioned[open_index][0]
+    if opening.type == "FUNC":
+        return _function_name_from_token(opening.value) in _REFERENCE_RETURNING_FUNCTIONS
+    if opening.type != "PAREN":
+        return False
+
+    inner_start = open_index + 1
+    inner_end = close_index - 1
+    if inner_start == inner_end:
+        inner = positioned[inner_start][0]
+        return inner.type == "OPERAND" and inner.subtype == "RANGE"
+    if inner_start < inner_end and positioned[inner_end][0].subtype == "CLOSE":
+        nested_open = _matching_open_token_index(positioned, inner_end)
+        if nested_open == inner_start:
+            return _closed_expression_returns_reference(positioned, inner_end)
+    return False
+
+
+def _validate_formula_operands(formula: str, tokens) -> None:
+    positioned = [
+        (token, position)
+        for token, position in zip(tokens, _token_positions(formula, tokens), strict=True)
+        if token.type != "WHITE-SPACE"
+    ]
+    if not positioned:
+        raise _formula_syntax_error(1, "formula has no expression")
+
+    for index, (token, position) in enumerate(positioned):
+        if token.type == "FUNC" and token.subtype == "OPEN" and ":" in token.value[:-1]:
+            endpoint_function = _function_name_from_token(token.value)
+            if endpoint_function not in _REFERENCE_RETURNING_FUNCTIONS:
+                raise _formula_syntax_error(
+                    position + token.value.rfind(":") + 2,
+                    f"range endpoint function {endpoint_function} is not reference-returning",
+                )
+        if token.type == "OPERAND" and token.subtype == "RANGE":
+            if token.value.strip(".") == "" or token.value.endswith("$"):
+                raise _formula_syntax_error(position + 1, f"invalid range/name operand {token.value!r}")
+        if token.type == "OPERATOR-INFIX":
+            previous = positioned[index - 1][0] if index > 0 else None
+            following = positioned[index + 1][0] if index + 1 < len(positioned) else None
+            if previous is None or previous.type in {"OPERATOR-INFIX", "OPERATOR-PREFIX", "SEP"}:
+                raise _formula_syntax_error(position + 1, f"operator {token.value!r} is missing a left operand")
+            if previous.subtype == "OPEN":
+                raise _formula_syntax_error(position + 1, f"operator {token.value!r} is missing a left operand")
+            if following is None or following.type in {"OPERATOR-INFIX", "OPERATOR-POSTFIX", "SEP"}:
+                raise _formula_syntax_error(position + 1, f"operator {token.value!r} is missing a right operand")
+            if following.subtype == "CLOSE":
+                raise _formula_syntax_error(position + 1, f"operator {token.value!r} is missing a right operand")
+        elif token.type == "OPERATOR-PREFIX":
+            following = positioned[index + 1][0] if index + 1 < len(positioned) else None
+            if following is None or following.type == "SEP" or following.subtype == "CLOSE":
+                raise _formula_syntax_error(position + 1, f"operator {token.value!r} is missing an operand")
+
+        if index == 0:
+            continue
+        previous, previous_position = positioned[index - 1]
+        whitespace_between = formula[previous_position + len(previous.value) : position].isspace()
+        previous_is_operand = previous.type == "OPERAND"
+        previous_is_closed_expression = previous.subtype == "CLOSE"
+        previous_is_postfix = previous.type == "OPERATOR-POSTFIX"
+        token_starts_expression = token.type == "OPERAND" or token.subtype == "OPEN"
+        if not token_starts_expression or not (
+            previous_is_operand or previous_is_closed_expression or previous_is_postfix
+        ):
+            continue
+        if previous_is_closed_expression and token.type == "PAREN" and token.subtype == "OPEN":
+            continue
+        if token.value.startswith(":"):
+            range_endpoint = token.value[1:]
+            left_returns_reference = (previous.type == "OPERAND" and previous.subtype == "RANGE") or (
+                previous_is_closed_expression and _closed_expression_returns_reference(positioned, index - 1)
+            )
+            right_returns_reference = (token.type == "OPERAND" and token.subtype == "RANGE") or (
+                token.type == "FUNC" and _function_name_from_token(token.value) in _REFERENCE_RETURNING_FUNCTIONS
+            )
+            if (
+                range_endpoint
+                and not range_endpoint.startswith(":")
+                and left_returns_reference
+                and right_returns_reference
+            ):
+                continue
+            raise _formula_syntax_error(position + 1, f"missing operator before {token.value!r}")
+        if (
+            whitespace_between
+            and (previous_is_closed_expression or previous.subtype == "RANGE")
+            and (token.type == "FUNC" or token.type == "PAREN" or token.subtype == "RANGE")
+        ):
+            continue
+        raise _formula_syntax_error(position + 1, f"missing operator before {token.value!r}")
+
+
+def _validate_function_arities(formula: str, tokens) -> None:
+    frames: list[dict[str, object]] = []
+    for token, position in zip(tokens, _token_positions(formula, tokens), strict=True):
+        if token.type == "WHITE-SPACE":
+            continue
+        if token.subtype == "OPEN":
+            if frames:
+                frames[-1]["has_content"] = True
+            frame: dict[str, object] = {"type": token.type, "has_content": False}
+            if token.type == "FUNC":
+                raw_name = token.value[:-1]
+                name_parts = raw_name.split(".")
+                compatibility_prefixes = {"_XLFN", "_XLWS"}
+                is_builtin = len(name_parts) == 1 or all(
+                    part.upper() in compatibility_prefixes for part in name_parts[:-1]
+                )
+                frame.update(
+                    {
+                        "name": name_parts[-1].upper() if is_builtin else "",
+                        "position": position,
+                        "separators": 0,
+                    }
+                )
+            frames.append(frame)
+            continue
+        if token.subtype == "CLOSE":
+            if not frames:
+                continue
+            frame = frames.pop()
+            if frame.get("type") != "FUNC":
+                continue
+            name = str(frame["name"])
+            bounds = _FUNCTION_ARITY_BOUNDS.get(name)
+            if bounds is None:
+                continue
+            separators = int(frame["separators"])
+            argument_count = separators + 1 if frame["has_content"] or separators else 0
+            minimum, maximum = bounds
+            if not minimum <= argument_count <= maximum:
+                expected = str(minimum) if minimum == maximum else f"{minimum} to {maximum}"
+                raise _formula_syntax_error(
+                    int(frame["position"]) + 1,
+                    f"function {name} expects {expected} arguments; received {argument_count}",
+                )
+            parity = _FUNCTION_ARGUMENT_PARITY.get(name)
+            if parity is not None and argument_count % 2 != parity:
+                pair_kind = "range/criteria pairs" if name == "COUNTIFS" else "criteria range/criteria pairs"
+                raise _formula_syntax_error(
+                    int(frame["position"]) + 1,
+                    f"function {name} expects complete {pair_kind}; received {argument_count} arguments",
+                )
+            continue
+        if token.type == "SEP" and token.subtype == "ARG" and frames and frames[-1].get("type") == "FUNC":
+            frames[-1]["separators"] = int(frames[-1]["separators"]) + 1
+            continue
+        if frames:
+            frames[-1]["has_content"] = True
+
+
+def validate_formula_for_excel(formula: str) -> None:
+    """Reject locally detectable formula syntax errors before workbook mutation."""
+    _validate_formula_delimiters(formula)
+    try:
+        from openpyxl.formula import Tokenizer
+        from openpyxl.formula.tokenizer import TokenizerError
+    except ImportError:
+        raise RuntimeError("openpyxl is required to validate formulas; install openpyxl>=3.1.5") from None
+
+    try:
+        tokenizer = Tokenizer(_SPILL_OPERATOR_RE.sub("%", formula))
+    except (IndexError, TokenizerError, ValueError) as exc:
+        raise _formula_syntax_error(len(formula), str(exc)) from None
+    _validate_formula_operands(formula, tokenizer.items)
+    _validate_function_arities(formula, tokenizer.items)
+
+
 def fill_formula(sheet, start_cell: str, end_row: int, end_col: str, formula_template: str) -> tuple[int, int]:
     """Fill a formula over an inclusive rectangular range.
 
     Returns (filled_cells, skipped_merged_cells).
     """
     try:
+        from openpyxl.cell.cell import MergedCell
         from openpyxl.formula.translate import Translator
         from openpyxl.utils.cell import column_index_from_string, coordinate_from_string
-        from openpyxl.cell.cell import MergedCell
     except ImportError:
         raise RuntimeError("openpyxl is required to fill formulas; install openpyxl>=3.1.5") from None
 
@@ -458,6 +734,14 @@ def fill_formula(sheet, start_cell: str, end_row: int, end_col: str, formula_tem
         raise ValueError(f"end_col ({end_col_norm}) must be >= start_cell col ({start_col_letter})")
 
     formula = normalize_formula_for_excel(formula_template)
+    validate_formula_for_excel(formula)
+
+    if end_row == start_row and end_col_idx == start_col_idx:
+        cell = sheet.cell(row=start_row, column=start_col_idx)
+        if isinstance(cell, MergedCell):
+            raise ValueError(f"start_cell {normalized_start!r} is a merged cell; use the top-left cell")
+        cell.value = formula
+        return 1, 0
 
     translator = Translator(formula, origin=normalized_start)
 

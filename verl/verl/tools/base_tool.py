@@ -35,6 +35,10 @@ class BaseTool:
 
     def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
         self.config = config
+        parallel_safe = config.get("parallel_safe", False)
+        if not isinstance(parallel_safe, bool):
+            raise ValueError("parallel_safe must be true or false")
+        self.parallel_safe = parallel_safe
         self.tool_schema = tool_schema or self.get_openai_tool_schema()
         assert self.tool_schema is not None, "Tool schema is not set!"
         self.name = self.tool_schema.function.name

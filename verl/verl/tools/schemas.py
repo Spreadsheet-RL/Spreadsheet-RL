@@ -12,6 +12,8 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import json
 from typing import Any, Literal
 
@@ -21,9 +23,14 @@ from pydantic import BaseModel, Field, model_validator
 class OpenAIFunctionPropertySchema(BaseModel):
     """The schema of a parameter in OpenAI format."""
 
-    type: str
+    type: str | list[str] | None = None
     description: str | None = None
-    enum: list[str] | None = None
+    enum: list[Any] | None = None
+    items: OpenAIFunctionPropertySchema | None = None
+    properties: dict[str, OpenAIFunctionPropertySchema] | None = None
+    required: list[str] | None = None
+    anyOf: list[OpenAIFunctionPropertySchema] | None = None
+    oneOf: list[OpenAIFunctionPropertySchema] | None = None
 
 
 class OpenAIFunctionParametersSchema(BaseModel):
@@ -68,7 +75,7 @@ class OpenAIFunctionCallSchema(BaseModel):
     @staticmethod
     def from_openai_function_parsed_schema(
         parsed_schema: OpenAIFunctionParsedSchema,
-    ) -> tuple["OpenAIFunctionCallSchema", bool]:
+    ) -> tuple[OpenAIFunctionCallSchema, bool]:
         has_decode_error = False
         try:
             arguments = json.loads(parsed_schema.arguments)

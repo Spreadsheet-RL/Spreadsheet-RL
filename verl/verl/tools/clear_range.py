@@ -14,12 +14,13 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
+from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
 from .recalculate import _file_signature, _recalculate_workbook_for_commit
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .worksheet_resolution import resolve_worksheet as _resolve_target_worksheet
 
 _A1_CELL_RE = r"[A-Z]{1,3}[0-9]{1,7}"
 _A1_COL_RE = r"[A-Z]{1,3}"
@@ -55,7 +56,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_sheet_arena_data_root()
+    workspace_base = get_spreadsheet_rl_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -110,16 +111,18 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(' \t\n\r\f\v"')
-    if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
-        name = name[1:-1].replace("''", "'")
-        return name.strip()
+    name = value.strip('\t\n\r\f\v"')
+    quoted = name.strip()
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return quoted[1:-1]
 
-    if name.startswith("'") and not name.endswith("'"):
-        name = name[1:]
-    elif name.endswith("'") and not name.startswith("'"):
-        name = name[:-1]
-    return name.strip()
+    if quoted.startswith("'") and not quoted.endswith("'"):
+        return quoted[1:]
+    if quoted.endswith("'") and not quoted.startswith("'"):
+        return quoted[:-1]
+    return name.strip("\t\n\r\f\v")
 
 
 def _quote_sheet_name_for_a1(sheet_name: str) -> str:
@@ -204,13 +207,13 @@ def _truncate_str(value: str, max_chars: int) -> str:
 def _to_jsonable_excel_value(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, (bool, int, str)):
+    if isinstance(value, bool | int | str):
         if isinstance(value, str):
             return _truncate_str(value, _get_max_string_chars())
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
-    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+    if isinstance(value, dt.datetime | dt.date | dt.time):
         return value.isoformat()
     if isinstance(value, dt.timedelta):
         return value.total_seconds()
@@ -250,14 +253,16 @@ def _scan_zip_metadata(
                 total_compressed += compressed
 
                 if uncompressed > max_member_uncompressed_bytes:
+                    filename = getattr(info, "filename", "?")
                     return (
                         "zip member too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
+                        f"(name={filename!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
                     )
                 if compressed > 0 and max_ratio > 0 and (uncompressed / compressed) > max_ratio:
+                    filename = getattr(info, "filename", "?")
                     return (
                         "zip member compression ratio too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
+                        f"(name={filename!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
                     )
 
                 if total_uncompressed > max_total_uncompressed_bytes:
@@ -327,26 +332,6 @@ def _acquire_lockfile(lock_path: Path, timeout_s: float):
     except BaseException:
         lock_file.close()
         raise
-
-
-def _resolve_target_worksheet(wb, requested_name: str):
-    worksheets = getattr(wb, "worksheets", None) or []
-    for ws in worksheets:
-        if getattr(ws, "title", None) == requested_name:
-            return ws
-
-    requested_cf = requested_name.casefold()
-    matches = [ws for ws in worksheets if getattr(ws, "title", "").casefold() == requested_cf]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        candidates = ", ".join(repr(getattr(ws, "title", "")) for ws in matches[:5])
-        raise RuntimeError(f"ambiguous sheet name: {requested_name!r} matches {candidates}")
-
-    sheetnames = getattr(wb, "sheetnames", None) or []
-    if any(isinstance(name, str) and name.casefold() == requested_cf for name in sheetnames):
-        raise RuntimeError(f"sheet is not a worksheet: {requested_name!r}")
-    raise RuntimeError(f"sheet not found: {requested_name!r}")
 
 
 def _format_a1_address(*, sheet_name: str, row: int, col: int) -> str:
@@ -508,10 +493,10 @@ def _clear_range_in_workbook(
         merged_ranges = getattr(getattr(ws, "merged_cells", None), "ranges", None) or []
         for merged_range in merged_ranges:
             try:
-                m_min_col = int(getattr(merged_range, "min_col"))
-                m_min_row = int(getattr(merged_range, "min_row"))
-                m_max_col = int(getattr(merged_range, "max_col"))
-                m_max_row = int(getattr(merged_range, "max_row"))
+                m_min_col = int(merged_range.min_col)
+                m_min_row = int(merged_range.min_row)
+                m_max_col = int(merged_range.max_col)
+                m_max_row = int(merged_range.max_row)
             except Exception:
                 continue
             if m_max_col < min_col or m_min_col > max_col or m_max_row < min_row or m_min_row > max_row:
@@ -791,7 +776,7 @@ class ClearRangeTool(BaseTool):
 
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)

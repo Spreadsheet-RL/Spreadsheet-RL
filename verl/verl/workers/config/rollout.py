@@ -79,6 +79,7 @@ class MultiTurnConfig(BaseConfig):
     tool_config_path: Optional[str] = None
     max_user_turns: Optional[int] = None
     max_parallel_calls: int = 1
+    max_serial_calls: Optional[int] = None
     max_tool_response_length: int = 256
     tool_response_truncate_side: str = "middle"
     use_inference_chat_template: bool = False

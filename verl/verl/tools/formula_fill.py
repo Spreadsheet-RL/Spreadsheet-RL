@@ -13,16 +13,18 @@ import stat
 import tempfile
 import time
 import uuid
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Optional
 
-from verl.utils.paths import get_sheet_arena_data_root, normalize_workspace_id
+from verl.utils.paths import get_spreadsheet_rl_data_root, normalize_workspace_id
 from verl.utils.rollout_trace import rollout_trace_op
 
 from .base_tool import BaseTool
-from .formula_fill_core import fill_formula, normalize_formula_for_excel
-from .recalculate import _post_recalculate, _scan_zip_metadata_bytes
+from .formula_fill_core import fill_formula, normalize_formula_for_excel, validate_formula_for_excel
+from .recalculate import _post_recalculate, _read_workbook_signature_under_lock_sync, _scan_zip_metadata_bytes
 from .schemas import OpenAIFunctionToolSchema, ToolResponse
+from .worksheet_resolution import resolve_worksheet as _resolve_target_worksheet
 
 _EXCEL_MAX_ROWS = 1_048_576
 _EXCEL_MAX_COLS = 16_384
@@ -31,6 +33,32 @@ _A1_CELL_RE = re.compile(r"^([A-Z]{1,3})([0-9]{1,7})$")
 _SAFE_SHEET_NAME_RE = re.compile(r"^[A-Za-z0-9_]+$")
 DEFAULT_MAX_RESPONSE_CHARS = 4096
 MAX_RESPONSE_CHARS = 8192
+_EXCEL_OPEN_FAILURE_MARKER = "open method of workbooks class failed"
+_EXCEL_OPEN_FAILURE_HINT = (
+    "Excel could not open the filled workbook. The inserted formula may be invalid for Excel; check parentheses, "
+    "quotes, operators, and built-in function arguments. If the formula is structurally valid, the workbook itself "
+    "may be incompatible with Excel/openpyxl round-tripping."
+)
+_NON_CACHEABLE_FUNCTION_NAMES = (
+    "CELL",
+    "INDIRECT",
+    "INFO",
+    "NOW",
+    "OFFSET",
+    "RAND",
+    "RANDBETWEEN",
+    "RANDARRAY",
+    "RTD",
+    "STOCKHISTORY",
+    "TODAY",
+    "WEBSERVICE",
+)
+_NON_CACHEABLE_FUNCTION_PATTERN = "|".join(_NON_CACHEABLE_FUNCTION_NAMES)
+_NON_CACHEABLE_FUNCTION_RE = re.compile(rf"(?i)(?<![A-Z0-9_.])(?:_xlfn\.)?(?:{_NON_CACHEABLE_FUNCTION_PATTERN})\s*\(")
+_NON_CACHEABLE_FUNCTION_BYTES_RE = re.compile(
+    rb"(?i)(?<![A-Z0-9_.])(?:_xlfn\.)?(?:" + _NON_CACHEABLE_FUNCTION_PATTERN.encode("ascii") + rb")\s*\("
+)
+_SUCCESSFUL_FILL_CACHE_MAX_ENTRIES = 256
 
 
 def _col_letter_to_index(col: str) -> int:
@@ -56,16 +84,18 @@ def _parse_a1_cell(value: str) -> tuple[str, int]:
 
 
 def _normalize_sheet_name(value: str) -> str:
-    name = value.strip(' \t\n\r\f\v"')
-    if len(name) >= 2 and name[0] == "'" and name[-1] == "'":
-        name = name[1:-1].replace("''", "'")
-        return name.strip()
+    name = value.strip('\t\n\r\f\v"')
+    quoted = name.strip()
+    if len(quoted) >= 2 and quoted[0] == "'" and quoted[-1] == "'":
+        return quoted[1:-1].replace("''", "'")
+    if len(quoted) >= 2 and quoted[0] == '"' and quoted[-1] == '"':
+        return quoted[1:-1]
 
-    if name.startswith("'") and not name.endswith("'"):
-        name = name[1:]
-    elif name.endswith("'") and not name.startswith("'"):
-        name = name[:-1]
-    return name.strip()
+    if quoted.startswith("'") and not quoted.endswith("'"):
+        return quoted[1:]
+    if quoted.endswith("'") and not quoted.startswith("'"):
+        return quoted[:-1]
+    return name.strip("\t\n\r\f\v")
 
 
 def _quote_sheet_name_for_a1(sheet_name: str) -> str:
@@ -110,7 +140,7 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     if not workspace_id:
         return None
 
-    workspace_base = get_sheet_arena_data_root()
+    workspace_base = get_spreadsheet_rl_data_root()
     workspaces_base = workspace_base / "_workspaces"
     try:
         if workspace_base.is_symlink():
@@ -164,26 +194,6 @@ def _resolve_workspace_file(*, workspace_id: Optional[str], relpath: Path) -> Op
     return None
 
 
-def _resolve_target_worksheet(wb, requested_name: str):
-    worksheets = getattr(wb, "worksheets", None) or []
-    for ws in worksheets:
-        if getattr(ws, "title", None) == requested_name:
-            return ws
-
-    requested_cf = requested_name.casefold()
-    matches = [ws for ws in worksheets if getattr(ws, "title", "").casefold() == requested_cf]
-    if len(matches) == 1:
-        return matches[0]
-    if len(matches) > 1:
-        candidates = ", ".join(repr(getattr(ws, "title", "")) for ws in matches[:5])
-        raise RuntimeError(f"ambiguous sheet name: {requested_name!r} matches {candidates}")
-
-    sheetnames = getattr(wb, "sheetnames", None) or []
-    if any(isinstance(name, str) and name.casefold() == requested_cf for name in sheetnames):
-        raise RuntimeError(f"sheet is not a worksheet: {requested_name!r}")
-    raise RuntimeError(f"sheet not found: {requested_name!r}")
-
-
 def _get_max_string_chars() -> int:
     raw = os.environ.get("SHEET_ARENA_TOOL_MAX_STRING_CHARS", "200").strip()
     try:
@@ -225,13 +235,13 @@ def _truncate_str(value: str, max_chars: int) -> str:
 def _to_jsonable_excel_value(value: Any) -> Any:
     if value is None:
         return None
-    if isinstance(value, (bool, int, str)):
+    if isinstance(value, bool | int | str):
         if isinstance(value, str):
             return _truncate_str(value, _get_max_string_chars())
         return value
     if isinstance(value, float):
         return value if math.isfinite(value) else str(value)
-    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+    if isinstance(value, dt.datetime | dt.date | dt.time):
         return value.isoformat()
     if isinstance(value, dt.timedelta):
         return value.total_seconds()
@@ -265,6 +275,12 @@ def _normalize_formula_template_for_excel(formula: str) -> str:
     return normalize_formula_for_excel(formula)
 
 
+def _excel_open_failure_hint(error: str) -> Optional[str]:
+    if _EXCEL_OPEN_FAILURE_MARKER in error.casefold():
+        return _EXCEL_OPEN_FAILURE_HINT
+    return None
+
+
 def _file_signature(file_path: Path) -> tuple[int, int, int, int]:
     st = file_path.stat()
     ino = int(getattr(st, "st_ino", 0) or 0)
@@ -275,6 +291,30 @@ def _file_signature(file_path: Path) -> tuple[int, int, int, int]:
     if not isinstance(mtime_ns, int):
         mtime_ns = int(st.st_mtime * 1e9)
     return ino, int(ctime_ns), int(mtime_ns), int(st.st_size)
+
+
+def _formula_is_cacheable(formula: str) -> bool:
+    return _NON_CACHEABLE_FUNCTION_RE.search(formula) is None
+
+
+def _workbook_is_cacheable(content: bytes) -> bool:
+    try:
+        import zipfile
+
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            for name in archive.namelist():
+                if name != "xl/workbook.xml" and not (name.startswith("xl/worksheets/") and name.endswith(".xml")):
+                    continue
+                with archive.open(name) as member:
+                    tail = b""
+                    while chunk := member.read(1024 * 1024):
+                        data = tail + chunk
+                        if _NON_CACHEABLE_FUNCTION_BYTES_RE.search(data):
+                            return False
+                        tail = data[-128:]
+    except Exception:
+        return False
+    return True
 
 
 def _write_bytes_atomically(file_path: Path, content: bytes, *, mode: int) -> None:
@@ -462,12 +502,14 @@ def _scan_zip_metadata(
                 if uncompressed > max_member_uncompressed_bytes:
                     return (
                         "zip member too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, bytes={uncompressed}, max={max_member_uncompressed_bytes})"
+                        f"(name={getattr(info, 'filename', '?')!r}, bytes={uncompressed}, "
+                        f"max={max_member_uncompressed_bytes})"
                     )
                 if compressed > 0 and max_ratio > 0 and (uncompressed / compressed) > max_ratio:
                     return (
                         "zip member compression ratio too large "
-                        f"(name={getattr(info, 'filename', '?')!r}, ratio={uncompressed / compressed:.1f}, max={max_ratio})"
+                        f"(name={getattr(info, 'filename', '?')!r}, "
+                        f"ratio={uncompressed / compressed:.1f}, max={max_ratio})"
                     )
 
                 if total_uncompressed > max_total_uncompressed_bytes:
@@ -677,6 +719,11 @@ def _truncate_payload_to_max_chars(payload: dict[str, Any], max_chars: int) -> s
         return response_text
 
     payload["truncated"] = True
+    if "overwritten_samples" in payload:
+        payload.pop("overwritten_samples", None)
+        response_text = _json_dumps_compact(payload)
+        if len(response_text) <= max_chars:
+            return response_text
     if "recalc_samples" in payload:
         payload.pop("recalc_samples", None)
         response_text = _json_dumps_compact(payload)
@@ -753,6 +800,11 @@ class FillFormulaTool(BaseTool):
     def __init__(self, config: dict, tool_schema: OpenAIFunctionToolSchema):
         super().__init__(config, tool_schema)
         self._instance_dict: dict[str, dict[str, Any]] = {}
+        deduplicate_successful_calls = config.get("deduplicate_successful_calls", True)
+        if not isinstance(deduplicate_successful_calls, bool):
+            raise ValueError("deduplicate_successful_calls must be true or false")
+        self.deduplicate_successful_calls = deduplicate_successful_calls
+        self._successful_fill_cache: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
         max_file_size_mb_raw = config.get("max_file_size_mb", 100)
         if max_file_size_mb_raw is None:
             self.max_file_size_bytes = None
@@ -772,7 +824,7 @@ class FillFormulaTool(BaseTool):
 
         self.recalc_url = (
             str(config.get("recalc_url") or "").strip()
-            or os.environ.get("SHEET_ARENA_RECALC_URL", "").strip()
+            or os.environ.get("SPREADSHEET_RL_RECALC_URL", "").strip()
             or "http://127.0.0.1:5000/recalculate"
         )
         recalc_timeout_s_raw = config.get("recalc_timeout_s", 180)
@@ -890,6 +942,14 @@ class FillFormulaTool(BaseTool):
                 ),
                 0.0,
                 {"status": "error", "error": "formula_template_too_long"},
+            )
+        try:
+            validate_formula_for_excel(formula_template)
+        except ValueError as exc:
+            return (
+                ToolResponse(text=f"Error: {exc}"),
+                0.0,
+                {"status": "error", "error": "invalid_formula_syntax"},
             )
 
         normalized_start_cell = start_cell_token.strip().upper().replace("$", "")
@@ -1049,6 +1109,55 @@ class FillFormulaTool(BaseTool):
             sample_cols = [start_col_idx + idx for idx in _sample_indices(total_cols, head=2, tail=2)]
             coords = [(row_num, col_num) for row_num in sample_rows for col_num in sample_cols]
 
+        cache_call_key = (
+            str(file_path),
+            sheet_name.casefold() if sheet_name is not None else None,
+            normalized_start_cell,
+            end_row,
+            end_col,
+            formula_template,
+        )
+        cache_has_call_key = any(key[0] == cache_call_key for key in self._successful_fill_cache)
+        if self.deduplicate_successful_calls and cache_has_call_key:
+            try:
+                workbook_signature = await asyncio.to_thread(
+                    _read_workbook_signature_under_lock_sync,
+                    file_path=file_path,
+                    lock_timeout_s=self.lock_timeout_s,
+                )
+            except (OSError, RuntimeError, TimeoutError):
+                workbook_signature = None
+            cache_key = (cache_call_key, workbook_signature)
+            cached_fill = self._successful_fill_cache.get(cache_key) if workbook_signature is not None else None
+            if cached_fill is not None:
+                self._successful_fill_cache.move_to_end(cache_key)
+                payload = json.loads(cached_fill["response_text"])
+                payload.update(
+                    {
+                        "cache_hit": True,
+                        "identical_call_repeated": True,
+                        "already_applied": True,
+                        "recalc_written": False,
+                        "recalculated": False,
+                        "needs_recalculation": False,
+                        "samples_source": "cache",
+                    }
+                )
+                response_text = _truncate_payload_to_max_chars(payload, self.max_response_chars)
+                metrics = dict(cached_fill["metrics"])
+                metrics.update(
+                    {
+                        "cache_hit": True,
+                        "identical_call_repeated": True,
+                        "already_applied": True,
+                        "recalc_written": False,
+                        "recalculated": False,
+                        "needs_recalculation": False,
+                        "samples_source": "cache",
+                    }
+                )
+                return ToolResponse(text=response_text), 0.0, metrics
+
         tmp_fill_path: Optional[Path] = None
         expected_sig: Optional[tuple[int, int, int, int]] = None
         resolved_sheet_name: Optional[str] = None
@@ -1061,6 +1170,8 @@ class FillFormulaTool(BaseTool):
         writeback_error: Optional[str] = None
         error_code: Optional[str] = None
         samples_source = "none"
+        recalc_content: Optional[bytes] = None
+        post_commit_signature: Optional[tuple[int, int, int, int]] = None
 
         try:
             try:
@@ -1156,6 +1267,15 @@ class FillFormulaTool(BaseTool):
                             except Exception as exc:
                                 recalc_written = False
                                 writeback_error = f"recalc writeback failed: {exc}"
+                            if recalc_written:
+                                try:
+                                    post_commit_signature = await asyncio.to_thread(
+                                        _read_workbook_signature_under_lock_sync,
+                                        file_path=file_path,
+                                        lock_timeout_s=self.lock_timeout_s,
+                                    )
+                                except (OSError, RuntimeError, TimeoutError):
+                                    post_commit_signature = None
 
             if (
                 recalc_error is not None
@@ -1199,6 +1319,7 @@ class FillFormulaTool(BaseTool):
         sheet_ref = _quote_sheet_name_for_a1(resolved_sheet_name)
 
         if recalc_error is not None:
+            recalc_hint = _excel_open_failure_hint(recalc_error)
             payload: dict[str, Any] = {
                 "status": "error",
                 "error": error_code or "recalc_failed",
@@ -1214,6 +1335,9 @@ class FillFormulaTool(BaseTool):
                 "recalc_error": _to_jsonable_excel_value(recalc_error),
                 "samples": samples,
             }
+            if recalc_hint is not None:
+                payload["recalc_failure_kind"] = "excel_open_failed"
+                payload["recalc_hint"] = recalc_hint
             response_text = _truncate_payload_to_max_chars(payload, self.max_response_chars)
             samples_out = payload.get("samples")
             sample_count = len(samples_out) if isinstance(samples_out, list) else 0
@@ -1228,6 +1352,8 @@ class FillFormulaTool(BaseTool):
                 "samples_source": samples_source,
                 "sample_cells": sample_count,
             }
+            if recalc_hint is not None:
+                metrics["recalc_failure_kind"] = "excel_open_failed"
             return ToolResponse(text=response_text), 0.0, metrics
 
         if writeback_error is not None:
@@ -1306,6 +1432,8 @@ class FillFormulaTool(BaseTool):
             "skipped_merged_cells": skipped_merged_cells,
             "samples_source": samples_source,
             "recalc_written": recalc_written,
+            "recalculated": True,
+            "needs_recalculation": False,
             "samples": samples,
         }
 
@@ -1319,9 +1447,28 @@ class FillFormulaTool(BaseTool):
             "filled_cells": filled_cells,
             "skipped_merged_cells": skipped_merged_cells,
             "recalc_written": recalc_written,
+            "recalculated": True,
+            "needs_recalculation": False,
             "samples_source": samples_source,
             "sample_cells": sample_count,
         }
+        workbook_cacheable = False
+        if (
+            self.deduplicate_successful_calls
+            and post_commit_signature is not None
+            and _formula_is_cacheable(formula_template)
+            and recalc_content is not None
+        ):
+            workbook_cacheable = await asyncio.to_thread(_workbook_is_cacheable, recalc_content)
+        if workbook_cacheable:
+            cache_key = (cache_call_key, post_commit_signature)
+            self._successful_fill_cache[cache_key] = {
+                "response_text": response_text,
+                "metrics": dict(metrics),
+            }
+            self._successful_fill_cache.move_to_end(cache_key)
+            while len(self._successful_fill_cache) > _SUCCESSFUL_FILL_CACHE_MAX_ENTRIES:
+                self._successful_fill_cache.popitem(last=False)
         return ToolResponse(text=response_text), 0.0, metrics
 
     async def calc_reward(self, instance_id: str, **kwargs) -> float:
