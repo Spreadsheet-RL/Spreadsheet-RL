@@ -18,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
-_PRODUCTION_HOST = os.environ.get("SPREADSHEET_RL_PRODUCTION_HOST", "").strip().lower()
 _DEFAULT_RECALC_URL = "http://127.0.0.1:5000/recalculate"
+_LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 _MAX_WORKERS_CAP = 8
 
 
@@ -68,13 +68,12 @@ def _url_join(base: str, path: str) -> str:
 
 
 def _is_production_url(url: str) -> bool:
-    if not _PRODUCTION_HOST:
-        return False
     try:
         host = urllib.parse.urlsplit(url).hostname or ""
     except Exception:
         return False
-    return host.rstrip(".").lower() == _PRODUCTION_HOST
+    normalized_host = host.rstrip(".").lower()
+    return bool(normalized_host and normalized_host not in _LOOPBACK_HOSTS)
 
 
 def _discover_samples(dataset_root: Path) -> list[tuple[str, Path]]:
@@ -568,7 +567,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--confirm-production",
         action="store_true",
-        help="Required when --submit-url points at SPREADSHEET_RL_PRODUCTION_HOST.",
+        help="Required when --submit-url or --recalc-url points at a non-loopback host.",
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--wait-s", type=float, default=25.0)
@@ -600,15 +599,15 @@ def main(argv: list[str] | None = None) -> int:
 
     submit_url = _normalize_submit_url(raw_submit_url)
     if _is_production_url(submit_url) and not bool(args.confirm_production):
-        raise SystemExit(
-            f"{_PRODUCTION_HOST} requires --confirm-production to avoid accidental load"
-        )
+        raise SystemExit("remote submit endpoint requires --confirm-production")
     max_workers_requested = max(1, int(args.max_workers))
     max_workers = min(n, max_workers_requested, _MAX_WORKERS_CAP)
     recalc_n = max(0, int(args.recalc_n))
     recalc_url = ""
     if recalc_n > 0:
         recalc_url = _normalize_recalc_url(str(args.recalc_url), submit_url=submit_url)
+        if _is_production_url(recalc_url) and not bool(args.confirm_production):
+            raise SystemExit("remote recalculation endpoint requires --confirm-production")
     print(f"submit_url={submit_url}")
     if recalc_n > 0:
         print(f"recalc_url={recalc_url} recalc_n={recalc_n}")

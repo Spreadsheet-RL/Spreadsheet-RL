@@ -5,11 +5,12 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+from _tempdir import temporary_directory
 
 
 def _pick_free_port() -> int:
@@ -60,7 +61,7 @@ def main() -> int:
     if sys.platform.startswith(("win", "cygwin", "msys")):
         port = _pick_free_port()
         base_url = f"http://127.0.0.1:{port}"
-        with tempfile.TemporaryDirectory(prefix="async_reward_api_startup_") as tmp:
+        with temporary_directory(prefix="async_reward_api_startup_") as tmp:
             tmp_path = Path(tmp)
             env = os.environ.copy()
             env.pop("REWARD_API_ALLOW_UNSUPPORTED_HOST_FOR_TESTS", None)

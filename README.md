@@ -87,9 +87,17 @@ Rewards are computed by uploading the agent-edited workbook to the async reward 
 
 ```powershell
 cd reward
-uv sync
+uv sync --locked
+$env:REWARD_API_OUTPUT_ROOT = 'D:\path\to\spreadsheet-rl\data'
+$env:REWARD_API_RECALC_JOB_ROOT = 'D:\path\to\spreadsheet-rl\recalc-jobs'
+$env:REWARD_API_MAX_UPLOAD_BYTES = '104857600'
 uv run async-reward-api --platform windows --host 127.0.0.1 --port 5000 --workers 2 --instance-per-worker 2
 ```
+
+`REWARD_API_OUTPUT_ROOT` must be the extracted dataset root containing each
+`<thread_dir>/instruction.json` and oracle `target.xlsx`. The loopback bind
+above assumes a local proxy or tunnel; for direct LAN access, bind to
+`0.0.0.0` and restrict the Windows firewall.
 
 See [reward/README.md](reward/README.md) for deployment, concurrency, and diagnostics.
 

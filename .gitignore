@@ -6,7 +6,6 @@ __pycache__/
 .ruff_cache/
 .mypy_cache/
 .venv/
-/reward/uv.lock
 /sandbox/uv.lock
 /sandbox/scripts/client/uv.lock
 

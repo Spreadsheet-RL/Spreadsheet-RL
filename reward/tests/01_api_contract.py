@@ -5,7 +5,6 @@ import os
 import socket
 import subprocess
 import sys
-import tempfile
 import time
 import io
 import urllib.error
@@ -16,6 +15,8 @@ from pathlib import Path
 
 import openpyxl
 
+from _tempdir import temporary_directory
+
 
 def _write_workbook(path: Path) -> None:
     wb = openpyxl.Workbook()
@@ -23,6 +24,7 @@ def _write_workbook(path: Path) -> None:
     ws.title = "Sheet1"
     ws["A1"] = 123
     wb.save(path)
+    wb.close()
 
 
 def _pick_free_port() -> int:
@@ -100,7 +102,7 @@ def main() -> int:
     port = _pick_free_port()
     base_url = f"http://127.0.0.1:{port}"
 
-    with tempfile.TemporaryDirectory(prefix="async_reward_api_contract_") as tmp:
+    with temporary_directory(prefix="async_reward_api_contract_") as tmp:
         tmp_path = Path(tmp)
         workbook = tmp_path / "workbook.xlsx"
         _write_workbook(workbook)

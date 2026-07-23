@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
+import sys
 
 import uvicorn
 
@@ -22,6 +24,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--log-level", default="info")
     args = parser.parse_args(argv)
+    logging.basicConfig(
+        stream=sys.stderr,
+        level=getattr(logging, str(args.log_level).upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
 
     platform = normalize_platform(args.platform)
     if platform is None:
