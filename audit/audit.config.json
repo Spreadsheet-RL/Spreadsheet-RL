@@ -1,0 +1,26 @@
+{
+  "seed": "Spreadsheet-RL-NeurIPS-29766-human-audit-v1",
+  "pool_size_per_split": 100,
+  "core_assignments_per_split": 80,
+  "core_auditors": [
+    "auditor1@example.com",
+    "auditor2@example.com",
+    "auditor3@example.com",
+    "auditor4@example.com",
+    "auditor5@example.com"
+  ],
+  "additional_auditors": {
+    "auditor6@example.com": {
+      "training": { "count": 80, "offset": 11 },
+      "domain": { "count": 80, "offset": 43 }
+    },
+    "training-auditor@example.com": {
+      "training": { "count": 50, "offset": 23 },
+      "domain": { "count": 0, "offset": 0 }
+    },
+    "domain-auditor@example.com": {
+      "training": { "count": 0, "offset": 0 },
+      "domain": { "count": 50, "offset": 67 }
+    }
+  }
+}

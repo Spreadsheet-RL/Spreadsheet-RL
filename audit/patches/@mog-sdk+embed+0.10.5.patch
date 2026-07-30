@@ -1,0 +1,2520 @@
+diff --git a/node_modules/@mog-sdk/embed/dist/index.cjs b/node_modules/@mog-sdk/embed/dist/index.cjs
+index ef5fcd3..7520cdc 100644
+--- a/node_modules/@mog-sdk/embed/dist/index.cjs
++++ b/node_modules/@mog-sdk/embed/dist/index.cjs
+@@ -181718,24 +181718,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248404,6 +248397,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248434,6 +248428,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248460,6 +248462,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248468,6 +248475,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248562,37 +248583,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264625,9 +264631,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264688,6 +264695,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264714,6 +264724,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264937,6 +264953,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -265003,6 +265020,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265062,6 +265080,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265674,6 +265694,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265694,17 +265725,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265723,6 +265833,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265992,6 +266108,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -266004,6 +266121,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266045,6 +266166,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266055,6 +266177,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266160,6 +266287,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266179,16 +266307,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });
+diff --git a/node_modules/@mog-sdk/embed/dist/index.js b/node_modules/@mog-sdk/embed/dist/index.js
+index b3a664f..a277f58 100644
+--- a/node_modules/@mog-sdk/embed/dist/index.js
++++ b/node_modules/@mog-sdk/embed/dist/index.js
+@@ -181714,24 +181714,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248390,6 +248383,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248420,6 +248414,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248446,6 +248448,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248454,6 +248461,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248548,37 +248569,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264611,9 +264617,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264674,6 +264681,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264700,6 +264710,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264923,6 +264939,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -264989,6 +265006,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265048,6 +265066,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265660,6 +265680,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265680,17 +265711,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265709,6 +265819,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265978,6 +266094,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -265990,6 +266107,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266031,6 +266152,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266041,6 +266163,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266146,6 +266273,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266165,16 +266293,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });
+diff --git a/node_modules/@mog-sdk/embed/dist/react.cjs b/node_modules/@mog-sdk/embed/dist/react.cjs
+index dfcc2d8..fc5d37b 100644
+--- a/node_modules/@mog-sdk/embed/dist/react.cjs
++++ b/node_modules/@mog-sdk/embed/dist/react.cjs
+@@ -181718,24 +181718,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248404,6 +248397,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248434,6 +248428,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248460,6 +248462,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248468,6 +248475,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248562,37 +248583,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264625,9 +264631,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264688,6 +264695,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264714,6 +264724,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264937,6 +264953,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -265003,6 +265020,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265062,6 +265080,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265674,6 +265694,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265694,17 +265725,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265723,6 +265833,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265992,6 +266108,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -266004,6 +266121,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266045,6 +266166,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266055,6 +266177,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266160,6 +266287,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266179,16 +266307,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });
+diff --git a/node_modules/@mog-sdk/embed/dist/react.js b/node_modules/@mog-sdk/embed/dist/react.js
+index 7950625..e63e69c 100644
+--- a/node_modules/@mog-sdk/embed/dist/react.js
++++ b/node_modules/@mog-sdk/embed/dist/react.js
+@@ -181714,24 +181714,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248399,6 +248392,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248429,6 +248423,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248455,6 +248457,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248463,6 +248470,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248557,37 +248578,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264620,9 +264626,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264683,6 +264690,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264709,6 +264719,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264932,6 +264948,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -264998,6 +265015,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265057,6 +265075,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265669,6 +265689,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265689,17 +265720,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265718,6 +265828,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265987,6 +266103,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -265999,6 +266116,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266040,6 +266161,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266050,6 +266172,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266155,6 +266282,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266174,16 +266302,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });
+diff --git a/node_modules/@mog-sdk/embed/dist/web-component.cjs b/node_modules/@mog-sdk/embed/dist/web-component.cjs
+index 4474460..338014b 100644
+--- a/node_modules/@mog-sdk/embed/dist/web-component.cjs
++++ b/node_modules/@mog-sdk/embed/dist/web-component.cjs
+@@ -181718,24 +181718,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248403,6 +248396,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248433,6 +248427,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248459,6 +248461,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248467,6 +248474,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248561,37 +248582,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264624,9 +264630,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264687,6 +264694,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264713,6 +264723,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264936,6 +264952,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -265002,6 +265019,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265061,6 +265079,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265673,6 +265693,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265693,17 +265724,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265722,6 +265832,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265991,6 +266107,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -266003,6 +266120,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266044,6 +266165,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266054,6 +266176,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266159,6 +266286,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266178,16 +266306,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });
+diff --git a/node_modules/@mog-sdk/embed/dist/web-component.js b/node_modules/@mog-sdk/embed/dist/web-component.js
+index 4378f2f..4469bda 100644
+--- a/node_modules/@mog-sdk/embed/dist/web-component.js
++++ b/node_modules/@mog-sdk/embed/dist/web-component.js
+@@ -181714,24 +181714,17 @@ var init_document_lifecycle_system = __esm({
+             );
+           }
+           markPerformance("dls:hydrateXlsx:import:start");
+-          await computeBridge.importFromXlsxBytesDeferred(xlsxBytes);
++          await computeBridge.importFromXlsxBytes(xlsxBytes, false);
+           markPerformance("dls:hydrateXlsx:import:end");
+           measurePerformance(
+             "dls:hydrateXlsx:import",
+             "dls:hydrateXlsx:import:start",
+             "dls:hydrateXlsx:import:end"
+           );
+-          this.deferredHydrationPending = true;
+-          this.importDurabilityPending = true;
+-          await this.settleDeferredImportMirror(computeBridge);
++          this.deferredHydrationPending = false;
++          this.importDurabilityPending = false;
+           const sheetIds = await computeBridge.getAllSheetIds();
+-          this.materializationTracker.markDeferredImport(
+-            sheetIds,
+-            materializedSheetIdsForDeferredImport(
+-              sheetIds,
+-              input.documentContext.mirror.getSelectedSheetIds()
+-            )
+-          );
++          this.materializationTracker.markAllMaterialized();
+           markPerformance("dls:hydrateXlsx:end");
+           measurePerformance("dls:hydrateXlsx", "dls:hydrateXlsx:start", "dls:hydrateXlsx:end");
+           return {
+@@ -248390,6 +248383,7 @@ var ViewportPositionIndex = class {
+     this._totalCols = 16384;
+     this._defaultRowHeight = defaultRowHeight;
+     this._defaultColWidth = defaultColWidth;
++    this._colWidthOverrides = /* @__PURE__ */ new Map();
+   }
+   /** Update with new position data from viewport buffer */
+   setPositions(rowPositions, colPositions, startRow, startCol, rowCount, colCount, defaultRowHeight, defaultColWidth) {
+@@ -248420,6 +248414,14 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - pixel position of column's left edge. Extrapolates continuously if out of range. */
+   getColLeft(col) {
++    const baseLeft = this._getBaseColLeft(col);
++    let overrideDelta = 0;
++    for (const [index, override] of this._colWidthOverrides) {
++      if (index < col) overrideDelta += override.width - override.originalWidth;
++    }
++    return baseLeft + overrideDelta;
++  }
++  _getBaseColLeft(col) {
+     if (this._colPositions && this._colPositions.length > 0) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this._colPositions.length) {
+@@ -248446,6 +248448,11 @@ var ViewportPositionIndex = class {
+   }
+   /** O(1) - column width (derived from consecutive positions) */
+   getColWidth(col) {
++    const override = this._colWidthOverrides.get(col);
++    if (override) return override.width;
++    return this._getBaseColWidth(col);
++  }
++  _getBaseColWidth(col) {
+     if (this._colPositions) {
+       const idx = col - this._startCol;
+       if (idx >= 0 && idx < this.realColCount && idx + 1 < this._colPositions.length) {
+@@ -248454,6 +248461,20 @@ var ViewportPositionIndex = class {
+     }
+     return this._defaultColWidth;
+   }
++  setColumnWidthOverride(col, width) {
++    if (!Number.isInteger(col) || col < 0 || !isPositiveFinite(width)) return;
++    const existing = this._colWidthOverrides.get(col);
++    this._colWidthOverrides.set(col, {
++      width,
++      originalWidth: existing?.originalWidth ?? this._getBaseColWidth(col)
++    });
++  }
++  getColumnWidthOverrides() {
++    return new Map(this._colWidthOverrides);
++  }
++  replaceColumnWidthOverrides(overrides) {
++    this._colWidthOverrides = new Map(overrides ?? []);
++  }
+   /** Whether position data is available */
+   get hasData() {
+     return this._rowPositions !== null && this._colPositions !== null;
+@@ -248548,37 +248569,22 @@ var ViewportPositionIndex = class {
+    * Returns an extrapolated column if X is outside the covered range.
+    */
+   findColAtX(x) {
+-    if (!this._colPositions || this._colPositions.length === 0) return null;
+-    const positions = this._colPositions;
+-    const firstLeft = positions[0];
+-    const lastRealIdx = this.realColCount - 1;
+-    const lastLeft = positions[Math.max(0, Math.min(lastRealIdx, positions.length - 1))];
+-    if (this.realColCount <= 0) return null;
+-    if (x < firstLeft) {
+-      const colsBeforeStart = Math.ceil((firstLeft - x) / this._defaultColWidth);
+-      return Math.max(0, this._startCol - colsBeforeStart);
+-    }
+-    const lastWidth = this.getColWidth(this._startCol + lastRealIdx);
+-    if (x >= lastLeft + lastWidth) {
+-      const lastCol = this._startCol + lastRealIdx;
+-      const colsAfterLast = Math.floor((x - lastLeft) / this._defaultColWidth);
+-      return Math.min(this._totalCols - 1, lastCol + colsAfterLast);
+-    }
++    if (!this._colPositions || this._colPositions.length === 0 || this.realColCount <= 0) return null;
+     let low = 0;
+-    let high = lastRealIdx;
+-    while (low < high) {
++    let high = this._totalCols - 1;
++    while (low <= high) {
+       const mid = low + high >>> 1;
+-      const midLeft = positions[mid];
+-      const nextLeft = mid + 1 < positions.length ? positions[mid + 1] : midLeft + this._defaultColWidth;
+-      if (x < midLeft) {
++      const left = this.getColLeft(mid);
++      const right = left + this.getColWidth(mid);
++      if (x < left) {
+         high = mid - 1;
+-      } else if (x >= nextLeft) {
++      } else if (x >= right) {
+         low = mid + 1;
+       } else {
+-        return mid + this._startCol;
++        return mid;
+       }
+     }
+-    return low + this._startCol;
++    return Math.max(0, Math.min(this._totalCols - 1, low));
+   }
+   // ---------------------------------------------------------------------------
+   // Hidden state
+@@ -264611,9 +264617,10 @@ function cancelFrame(id) {
+     clearTimeout(id);
+   }
+ }
+-
+ // ../../views/sheet-view/src/sheet-view.ts
+ var INTERNAL_GRID_RENDERER_KEY = "__mogInternalGridRenderer";
++var MIN_SESSION_COLUMN_WIDTH = 24;
++var MAX_SESSION_COLUMN_WIDTH = 1e3;
+ var SheetView = class {
+   // ===========================================================================
+   // Constructor — container + renderer + indices + ResizeObserver.
+@@ -264674,6 +264681,9 @@ var SheetView = class {
+     this._lastEditorIsEditing = false;
+     /** Optional built-in viewport chrome owned by SheetView. */
+     this._viewportChrome = null;
++    /** View-only column widths, isolated by sheet and discarded with this view. */
++    this._sessionColumnWidths = /* @__PURE__ */ new Map();
++    this._columnResizeStatus = null;
+     this._config = {
+       container: config.container,
+       showHeaders: config.showHeaders ?? true,
+@@ -264700,6 +264710,12 @@ var SheetView = class {
+     this._rendererContainer = rc;
+     this._syncRendererContainerInset();
+     config.container.insertBefore(rc, config.container.firstChild);
++    const columnResizeStatus = document.createElement("div");
++    columnResizeStatus.setAttribute("role", "status");
++    columnResizeStatus.setAttribute("aria-live", "polite");
++    columnResizeStatus.style.cssText = "position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0;";
++    config.container.appendChild(columnResizeStatus);
++    this._columnResizeStatus = columnResizeStatus;
+     this._positionIndex = new ViewportPositionIndex();
+     this._mergeIndex = new ViewportMergeIndex();
+     const rect = config.container.getBoundingClientRect();
+@@ -264923,6 +264939,7 @@ var SheetView = class {
+     this._workbookViewport = workbook.viewport;
+     const initialSheetId = workbook.activeSheet.sheetId;
+     this._renderer.switchSheet(initialSheetId);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(initialSheetId));
+     this._syncWorkbookDataSources();
+     this._wiring = this._createViewportWiring(this._workbookViewport);
+     this._wiring.connect();
+@@ -264989,6 +265006,7 @@ var SheetView = class {
+     }
+     const oldSheetId = this._renderer.getCurrentSheetId();
+     this._renderer.switchSheet(sheetId2);
++    this._positionIndex.replaceColumnWidthOverrides(this._sessionColumnWidths.get(sheetId2));
+     this._syncWorkbookDataSources();
+     this._overlaysImpl.handleSheetChange();
+     if (oldSheetId && oldSheetId !== sheetId2) {
+@@ -265048,6 +265066,8 @@ var SheetView = class {
+     this._focusDispose = null;
+     this._viewportChrome?.dispose();
+     this._viewportChrome = null;
++    this._columnResizeStatus?.remove();
++    this._columnResizeStatus = null;
+     this._eventsImpl.clear();
+     this._geometryImpl.clearObservers();
+     this._viewportImpl.clearObservers();
+@@ -265660,6 +265680,17 @@ var SheetView = class {
+       throw new Error("SheetView: method called after dispose()");
+     }
+   }
++  _setSessionColumnWidth(col, width) {
++    const sheetId2 = this._renderer.getCurrentSheetId();
++    if (!sheetId2) return;
++    this._positionIndex.setColumnWidthOverride(col, width);
++    this._sessionColumnWidths.set(sheetId2, this._positionIndex.getColumnWidthOverrides());
++    this._recomputeLayout({ scheduleRefresh: "if-changed" });
++    this._renderer.invalidateAll();
++    if (this._columnResizeStatus) {
++      this._columnResizeStatus.textContent = `Column ${colToLetter(col)} width ${Math.round(width)} pixels. This view-only change is not saved.`;
++    }
++  }
+   /**
+    * Emit a view-level event to all subscribers.
+    * Short-hand for `this._eventsImpl.emit()` with a disposed guard.
+@@ -265680,17 +265711,96 @@ var SheetView = class {
+     };
+     el.addEventListener("wheel", onWheel, { passive: false });
+     this._wheelDispose = () => el.removeEventListener("wheel", onWheel);
+-    const hitTestCell = (e) => {
++    const hitTestPoint = (e) => {
+       const rect = el.getBoundingClientRect();
+       const x = e.clientX - rect.left;
+       const y = e.clientY - rect.top;
+       const hit = this._renderer.hitTest(x, y);
++      return { hit, x, y };
++    };
++    const hitTestCell = (e) => {
++      const { hit, x, y } = hitTestPoint(e);
+       if (hit && hit.type === "cell") {
+         const cell = hit;
+         return { row: cell.row, col: cell.col, x, y };
+       }
+       return null;
+     };
++    let columnResizeDrag = null;
++    const removeColumnResizeGuide = () => {
++      columnResizeDrag?.guide.remove();
++    };
++    const finishColumnResize = (apply) => {
++      const drag = columnResizeDrag;
++      if (!drag) return;
++      if (apply) this._setSessionColumnWidth(drag.col, drag.currentWidth);
++      if (el.hasPointerCapture(drag.pointerId)) el.releasePointerCapture(drag.pointerId);
++      removeColumnResizeGuide();
++      columnResizeDrag = null;
++      el.style.cursor = "";
++    };
++    const onPointerDown = (e) => {
++      if (!e.isPrimary || e.button !== 0) return;
++      const { hit, x } = hitTestPoint(e);
++      if (!hit || hit.type !== "columnResize") return;
++      const startWidth = this._positionIndex.getColWidth(hit.col);
++      const guide = document.createElement("div");
++      guide.style.cssText = "position:absolute;top:0;bottom:14px;width:2px;background:#217346;z-index:1002;pointer-events:none;";
++      const label = document.createElement("span");
++      label.style.cssText = "position:absolute;top:4px;left:6px;padding:2px 5px;border-radius:3px;background:#173f2c;color:#fff;font:12px system-ui;white-space:nowrap;";
++      label.textContent = `${Math.round(startWidth)} px`;
++      guide.appendChild(label);
++      guide.style.left = `${x}px`;
++      el.appendChild(guide);
++      columnResizeDrag = {
++        pointerId: e.pointerId,
++        col: hit.col,
++        startClientX: e.clientX,
++        startLocalX: x,
++        startWidth,
++        currentWidth: startWidth,
++        guide,
++        label
++      };
++      el.setPointerCapture(e.pointerId);
++      el.style.cursor = "col-resize";
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerMove = (e) => {
++      const drag = columnResizeDrag;
++      if (!drag || drag.pointerId !== e.pointerId) {
++        const { hit } = hitTestPoint(e);
++        el.style.cursor = hit?.type === "columnResize" ? "col-resize" : "";
++        return;
++      }
++      const zoom = Number.isFinite(this._currentZoom) && this._currentZoom > 0 ? this._currentZoom : 1;
++      const delta = (e.clientX - drag.startClientX) / zoom;
++      drag.currentWidth = Math.max(
++        MIN_SESSION_COLUMN_WIDTH,
++        Math.min(MAX_SESSION_COLUMN_WIDTH, drag.startWidth + delta)
++      );
++      drag.guide.style.left = `${drag.startLocalX + (drag.currentWidth - drag.startWidth) * zoom}px`;
++      drag.label.textContent = `${Math.round(drag.currentWidth)} px`;
++      e.preventDefault();
++    };
++    const onPointerUp = (e) => {
++      if (columnResizeDrag?.pointerId !== e.pointerId) return;
++      finishColumnResize(true);
++      e.preventDefault();
++      e.stopPropagation();
++    };
++    const onPointerCancel = (e) => {
++      if (columnResizeDrag?.pointerId === e.pointerId) finishColumnResize(false);
++    };
++    const onPointerLeave = () => {
++      if (!columnResizeDrag) el.style.cursor = "";
++    };
++    el.addEventListener("pointerdown", onPointerDown);
++    el.addEventListener("pointermove", onPointerMove);
++    el.addEventListener("pointerup", onPointerUp);
++    el.addEventListener("pointercancel", onPointerCancel);
++    el.addEventListener("pointerleave", onPointerLeave);
+     const onClick = (e) => {
+       const result = hitTestCell(e);
+       if (result) {
+@@ -265709,6 +265819,12 @@ var SheetView = class {
+       el.removeEventListener("dblclick", onDblClick);
+       el.removeEventListener("contextmenu", onContextMenu);
+       el.removeEventListener("mousemove", onMouseMove);
++      el.removeEventListener("pointerdown", onPointerDown);
++      el.removeEventListener("pointermove", onPointerMove);
++      el.removeEventListener("pointerup", onPointerUp);
++      el.removeEventListener("pointercancel", onPointerCancel);
++      el.removeEventListener("pointerleave", onPointerLeave);
++      finishColumnResize(false);
+     };
+     const onDblClick = (e) => {
+       const result = hitTestCell(e);
+@@ -265978,6 +266094,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     super();
+     this._client = null;
+     this._disposed = false;
++    this._activeCell = null;
+     this._container = container;
+     const headers = options?.headers ?? true;
+     const gridlines = options?.gridlines ?? true;
+@@ -265990,6 +266107,10 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     this._formulaBar = showFormulaBar ? new FormulaBar(container) : null;
+     this._canvasArea = document.createElement("div");
+     this._canvasArea.style.cssText = "position: relative; width: 100%; flex: 1; min-height: 0; overflow: hidden;";
++    this._canvasArea.tabIndex = 0;
++    this._canvasArea.setAttribute("aria-label", "Spreadsheet grid");
++    this._onKeyDown = (event) => this._handleKeyDown(event);
++    this._canvasArea.addEventListener("keydown", this._onKeyDown);
+     container.appendChild(this._canvasArea);
+     this._sheetTabs = showTabs ? new SheetTabs(container, theme) : null;
+     this._view = createSheetView(
+@@ -266031,6 +266152,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   /** Switch to a different sheet by its SheetId. Called by the web component / React wrapper. */
+   updateSheet(sheetId2) {
+     if (this._disposed) return;
++    this._activeCell = null;
+     this._view.switchSheet(sheetId2);
+   }
+   /** Populate the sheet tab bar. */
+@@ -266041,6 +266163,11 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   }
+   /** Update the formula bar to reflect the selected cell. */
+   setSelectedCell(row, col) {
++    this._activeCell = { row, col };
++    const range3 = { startRow: row, startCol: col, endRow: row, endCol: col };
++    this._view.renderState.update({
++      selection: { ranges: [range3], activeCell: { row, col } }
++    });
+     this._formulaBar?.setRef(row, col);
+   }
+   /** Resize the container. */
+@@ -266146,6 +266273,7 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+   dispose() {
+     if (this._disposed) return;
+     this._disposed = true;
++    this._canvasArea.removeEventListener("keydown", this._onKeyDown);
+     this._viewEvents.dispose();
+     this._view.dispose();
+     this._formulaBar?.dispose();
+@@ -266165,16 +266293,47 @@ var EmbedRenderOrchestrator = class extends TypedEventEmitter {
+     const merge = this._view.geometry.getMergeAnchor(row, col);
+     const anchorRow = merge ? merge.startRow : row;
+     const anchorCol = merge ? merge.startCol : col;
++    this._canvasArea.focus({ preventScroll: true });
+     this._formulaBar?.setRef(anchorRow, anchorCol);
+     this.emit("cellSelect", { row: anchorRow, col: anchorCol });
+     void this._fetchCellInfo(anchorRow, anchorCol);
+   }
++  _handleKeyDown(event) {
++    if (event.defaultPrevented || !this._activeCell) return;
++    if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
++    const delta = {
++      ArrowUp: { row: -1, col: 0 },
++      ArrowDown: { row: 1, col: 0 },
++      ArrowLeft: { row: 0, col: -1 },
++      ArrowRight: { row: 0, col: 1 }
++    }[event.key];
++    if (!delta) return;
++    event.preventDefault();
++    const current = this._activeCell;
++    const currentMerge = this._view.geometry.getMergeAnchor(current.row, current.col);
++    let row = current.row;
++    let col = current.col;
++    if (delta.row > 0) row = (currentMerge?.endRow ?? row) + 1;
++    if (delta.row < 0) row -= 1;
++    if (delta.col > 0) col = (currentMerge?.endCol ?? col) + 1;
++    if (delta.col < 0) col -= 1;
++    row = Math.max(0, Math.min(MAX_ROWS - 1, row));
++    col = Math.max(0, Math.min(MAX_COLS - 1, col));
++    const targetMerge = this._view.geometry.getMergeAnchor(row, col);
++    row = targetMerge?.startRow ?? row;
++    col = targetMerge?.startCol ?? col;
++    if (row === current.row && col === current.col) return;
++    const nextScroll = this._view.viewport.getScrollToCell({ row, col });
++    if (nextScroll) this._view.viewport.setScrollPosition(nextScroll, "main");
++    this._handleCellClick(row, col);
++  }
+   async _fetchCellInfo(row, col) {
+     const client = this._client;
+     if (!client || client.status !== "ready") return;
+     try {
+       const ws = client.getActiveSheet();
+       const cell = await ws.getCell(row, col);
++      if (this._activeCell?.row !== row || this._activeCell?.col !== col) return;
+       const ref = cellRef(row, col);
+       const formula = cell?.formula ?? cell?.value?.toString() ?? "";
+       this._formulaBar?.setCellInfo({ ref, formula });

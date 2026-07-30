@@ -1,0 +1,42 @@
+{
+  "name": "spreadsheet-rl-data-audit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "npm run build:frontend",
+    "build:frontend": "node scripts/build_frontend.mjs",
+    "postinstall": "patch-package",
+    "dev": "npm run build && wrangler dev",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "cf:types": "wrangler types",
+    "deploy:dry": "npm run build && wrangler deploy --dry-run",
+    "deploy": "npm run build && wrangler deploy",
+    "seed:prepare": "python3 scripts/prepare_seed.py",
+    "seed:local": "wrangler d1 execute spreadsheet-rl-audit --local --file migrations/0001_initial.sql && wrangler d1 execute spreadsheet-rl-audit --local --file seed/seed.sql"
+  },
+  "dependencies": {
+    "@mog-sdk/embed": "0.10.5",
+    "react": "19.2.8",
+    "react-dom": "19.2.8"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "0.18.8",
+    "@types/node": "^26.1.1",
+    "@types/react": "^19.2.2",
+    "@types/react-dom": "^19.2.2",
+    "@vitejs/plugin-react": "6.0.4",
+    "patch-package": "^8.0.1",
+    "typescript": "7.0.2",
+    "vite": "8.1.5",
+    "vitest": "4.1.10",
+    "wrangler": "4.115.0"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260722.1": true,
+    "fsevents@2.3.3": true
+  }
+}
