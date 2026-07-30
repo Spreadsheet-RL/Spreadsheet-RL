@@ -18,6 +18,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 🚀 2026-08-01: Released the [Spreadsheet-RL-8B checkpoint](https://huggingface.co/Spreadsheet-RL/Spreadsheet-RL-8B), scaling SpreadsheetBench Pass@1 from 15.9% for the base model to 16.7% with the agent harness and full tool set, and to 22.3% after 35 RL steps.
 - 🔍 2026-07-30: Released the [Spreadsheet-RL data audit platform](audit/) for reviewing dataset tasks and workbooks.
 - ⚡ 2026-07-23: Updated and optimized the asynchronous reward and workbook recalculation endpoint implementation, improving concurrency, job persistence, cleanup, and failure recovery.
 - 🧰 2026-07-14: Improved spreadsheet-native tool scaffolding with sheet discovery, resilient cell search, and more accurate formula filling.
