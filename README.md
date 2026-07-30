@@ -18,6 +18,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 ## News
 
+- 🔍 2026-07-30: Released the [Spreadsheet-RL data audit platform](audit/) for reviewing dataset tasks and workbooks.
 - ⚡ 2026-07-23: Updated and optimized the asynchronous reward and workbook recalculation endpoint implementation, improving concurrency, job persistence, cleanup, and failure recovery.
 - 🧰 2026-07-14: Improved spreadsheet-native tool scaffolding with sheet discovery, resilient cell search, and more accurate formula filling.
 - 📊 2026-06-30: Integrated [SpreadsheetBench-2](https://huggingface.co/datasets/KAKA22/SpreadsheetBench-v2) non-visual tasks into the Spreadsheet-RL dataset, adding 297 recalculated Debugging, Financial_Model, and Template tasks plus parquet splits.
@@ -30,6 +31,7 @@ Spreadsheet-RL is a reinforcement learning framework for training LLM agents on 
 
 This code release contains the training and evaluation stack used by the Spreadsheet-RL paper:
 
+- `audit/`: Cloudflare-based human-audit platform for reviewing dataset tasks and workbooks.
 - `configs/`: root-level training and tool configs.
 - `scripts/`: Slurm launcher for multi-node FSDP training.
 - `reward/`: async FastAPI reward service backed by Microsoft Excel recalculation.
