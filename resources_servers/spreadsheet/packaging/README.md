@@ -144,6 +144,9 @@ Pass a fresh short `--ipc-root` such as `/workspace/storage-shared/nlp/tungks/a`
 both Ray and vLLM create Unix sockets subject to Linux's 107-byte path limit.
 The helper validates their path lengths and keeps temporary files in that root;
 the longer `--run-dir` still holds configuration, caches, logs and receipts.
+`smoke_driver.py` supplies the existing NeMo-RL `init_ray(log_dir=...)` hook so
+Ray's dashboard sockets also fit. It then runs the unchanged training entrypoint;
+no trainer source or global Ray configuration is modified.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;

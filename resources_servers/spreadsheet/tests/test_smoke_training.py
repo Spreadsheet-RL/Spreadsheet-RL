@@ -71,8 +71,9 @@ def test_long_run_paths_use_short_vllm_and_ray_ipc_directories(monkeypatch):
     project = Path("/workspace/storage-shared/nlp/tungks")
     root = project / "spreadsheet_all/runs/long-training-run"
     ipc = project / "a"
-    env = clean_environment(root, ipc / "ray", project / "gym")
+    env = clean_environment(root, ipc, project / "gym")
     assert env["TMPDIR"] == str(ipc / "tmp")
     assert env["RAY_TMPDIR"] == str(ipc)
     assert len(str(ipc / "tmp" / ("x" * 36)).encode()) <= 107
+    assert len(str(ipc / "session_9999-99-99_99-99-99_999999_9999999/sockets/dash_MetricsHead").encode()) <= 107
     assert env["HF_HUB_OFFLINE"] == "1"

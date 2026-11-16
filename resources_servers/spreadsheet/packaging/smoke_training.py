@@ -156,18 +156,16 @@ def clean_environment(root, ray_root, gym_root):
         path = root / relative
         path.mkdir(parents=True, exist_ok=True)
         env[key] = str(path)
-    if ray_root.name != "ray":
-        raise ValueError("Use a fresh short <writeRoot>/ray directory")
-    # Ray 2.55 uses the unsuffixed plasma_store name in a fresh session.
-    if len(str(ray_root / "session_9999-99-99_99-99-99_999999_9999999/sockets/plasma_store").encode()) > 107:
+    # Include Ray's longest dashboard socket as well as its object store.
+    if len(str(ray_root / "session_9999-99-99_99-99-99_999999_9999999/sockets/dash_MetricsHead").encode()) > 107:
         raise ValueError("Ray socket path is too long; select a shorter declared Ray root")
-    temp = ray_root.parent / "tmp"
+    temp = ray_root / "tmp"
     if len(str(temp / "99999999-9999-9999-9999-999999999999").encode()) > 107:
         raise ValueError("vLLM IPC socket path is too long; select a shorter IPC root")
     temp.mkdir(mode=0o700)
     env["TMPDIR"] = str(temp)
     env.update(
-        RAY_TMPDIR=str(ray_root.parent),
+        RAY_TMPDIR=str(ray_root),
         PYTHONDONTWRITEBYTECODE="1",
         TOKENIZERS_PARALLELISM="false",
         HF_HUB_OFFLINE="1",
@@ -243,7 +241,7 @@ def main():
     if socket.gethostname() != args.expected_hostname:
         parser.error("Wrong training instance")
     root, ipc_root = args.run_dir.resolve(), args.ipc_root.resolve()
-    ray_root = ipc_root / "ray"
+    ray_root = ipc_root
     if root.exists() or ipc_root.exists():
         parser.error("Run and IPC directories must both be fresh")
     root.mkdir(mode=0o700)
@@ -283,6 +281,7 @@ def main():
     private = OmegaConf.load(args.private_config).spreadsheet_resources.resources_servers.spreadsheet
     secrets = [str(private.api_key), str(private.session_secret_key)]
     entry = args.trainer_root / "examples/nemo_gym/run_grpo_nemo_gym.py"
+    driver = Path(__file__).with_name("smoke_driver.py")
     report = {
         "status": "running",
         "hostname": socket.gethostname(),
@@ -295,6 +294,7 @@ def main():
         "source_data_sha256": sha(source),
         "task_ids": [row["task_id"] for row in rows],
         "entrypoint_sha256": sha(entry),
+        "driver_sha256": sha(driver),
         "gpus_before": before,
         "requested_optimizer_steps": 2,
         "max_wall_seconds": args.max_wall_seconds,
@@ -317,7 +317,17 @@ def main():
     )
     start = time.monotonic()
     process = subprocess.Popen(
-        [sys.executable, "-B", str(entry), "--config", str(config)],
+        [
+            sys.executable,
+            "-B",
+            str(driver),
+            "--entrypoint",
+            str(entry),
+            "--config",
+            str(config),
+            "--ray-root",
+            str(ray_root),
+        ],
         cwd=root,
         env=env,
         stdout=subprocess.PIPE,
