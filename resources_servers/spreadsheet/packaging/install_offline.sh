@@ -21,8 +21,8 @@ fi
 export DEBIAN_FRONTEND=noninteractive
 apt-get -y --no-download --no-install-recommends \
   -o "Dir::Cache::archives=$bundle_dir/debs" install "$bundle_dir"/debs/*.deb
-/usr/bin/python3 -m venv "$bundle_dir/service-venv"
-"$bundle_dir/service-venv/bin/python" -m pip install --no-index \
+/usr/bin/python3 -I -m venv "$bundle_dir/service-venv"
+"$bundle_dir/service-venv/bin/python" -I -m pip install --ignore-installed --no-index \
   --find-links "$bundle_dir/wheelhouse" \
   -r "$bundle_dir/source/resources_servers/spreadsheet/service/requirements.txt"
 # Root filesystem contains no service keys, oracle files, or live workspaces.

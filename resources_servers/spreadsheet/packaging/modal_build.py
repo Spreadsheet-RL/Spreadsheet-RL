@@ -76,6 +76,7 @@ def validate_clean(code_commit: str):
         subprocess.run(
             [
                 python,
+                "-I",
                 "-m",
                 "pip",
                 "install",
@@ -90,7 +91,12 @@ def validate_clean(code_commit: str):
         tested = subprocess.run(
             [python, "-m", "pytest", "-c", "/dev/null", "-q", "-ra", "resources_servers/spreadsheet/tests"],
             cwd=bundle / "source",
-            env=dict(os.environ, SPREADSHEET_TEST_REAL_LO="1", SPREADSHEET_TEST_ROOTFS=str(bundle / "python-root")),
+            env=dict(
+                os.environ,
+                PYTHONPATH=str(bundle / "source"),
+                SPREADSHEET_TEST_REAL_LO="1",
+                SPREADSHEET_TEST_ROOTFS=str(bundle / "python-root"),
+            ),
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -222,6 +228,7 @@ def build(code_commit: str, publish_repo: str = ""):
             "import fastapi,uvicorn,openpyxl; from resources_servers.spreadsheet.service.engines import LibreOfficePool; from pathlib import Path; p=LibreOfficePool(Path('/build/offline-smoke-office')); p.probe(); p.close(); print('offline-venv-and-uno-ready')",
         ],
         cwd=bundle / "source",
+        env={"PATH": "/usr/bin:/bin", "LANG": "C.UTF-8"},
         check=True,
         timeout=90,
     )
