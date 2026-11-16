@@ -104,7 +104,7 @@ class SpreadsheetAgent(SimpleAgent):
             # We raise for status here since we expect model calls to always work.
             await raise_for_status(model_response)
             model_response_json = await get_response_json(model_response)
-            model_server_cookies = model_response.cookies
+            model_server_cookies = dict(model_server_cookies or {}) | dict(model_response.cookies)
             try:
                 model_response = NeMoGymResponse.model_validate(model_response_json)
             except ValidationError as e:
@@ -175,7 +175,7 @@ class SpreadsheetAgent(SimpleAgent):
                 # We don't raise for status here since it's a valid return for the API to error e.g. if the model outputs an invalid call or something.
                 if api_response.status >= 500:
                     await raise_for_status(api_response)
-                resources_server_cookies = api_response.cookies
+                resources_server_cookies = dict(resources_server_cookies or {}) | dict(api_response.cookies)
 
                 tool_response = NeMoGymFunctionCallOutput(
                     type="function_call_output",

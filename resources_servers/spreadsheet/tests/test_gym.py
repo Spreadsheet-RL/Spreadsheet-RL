@@ -122,3 +122,53 @@ async def test_retried_responses_share_one_agent_execution():
     assert a.model_dump() == b.model_dump()
     paths = [c.kwargs["url_path"] for c in server.server_client.post.call_args_list]
     assert paths == ["/begin_execution", "/v1/responses"]
+
+
+@pytest.mark.asyncio
+async def test_multiple_tool_turns_keep_cookies_when_a_response_has_no_set_cookie():
+    server = agent()
+    first = {"type": "function_call", "name": "list_sheets", "call_id": "read-1", "arguments": "{}"}
+    second = {"type": "function_call", "name": "inspect_range", "call_id": "read-2", "arguments": '{"range":"A1"}'}
+    server.server_client.post = AsyncMock(
+        side_effect=[
+            reply(model_response([first])),
+            reply({"sheets": []}),
+            reply(model_response([second])),
+            reply({"cells": []}),
+            reply(model_response([final_message()])),
+        ]
+    )
+    await server._responses_once(request(), Response(), NeMoGymResponseCreateParamsNonStreaming(input=[]))
+    calls = server.server_client.post.call_args_list
+    assert calls[3].kwargs["cookies"]["spreadsheet_test"] == "signed-session-cookie"
+    assert calls[3].kwargs["headers"]["X-Spreadsheet-Operation-Id"] == "read-2"
+
+
+def test_adapter_refreshes_cookie_on_read_only_tool(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from resources_servers.spreadsheet.app import SpreadsheetConfig, SpreadsheetResourcesServer
+
+    config = SpreadsheetConfig(
+        host="127.0.0.1",
+        port=8003,
+        entrypoint="app.py",
+        name="test",
+        service_url="http://service:8088",
+        api_key="x" * 40,
+        session_secret_key="y" * 40,
+    )
+    server = SpreadsheetResourcesServer(config=config, server_client=MagicMock(spec=ServerClient))
+    backend = AsyncMock(
+        side_effect=[
+            {"session_id": "a" * 32},
+            {"job_id": "j", "status": "DONE", "result": {"ok": True, "output": {"sheets": []}}},
+        ]
+    )
+    monkeypatch.setattr(SpreadsheetResourcesServer, "_call", backend)
+    client = TestClient(server.setup_webserver())
+    seeded = client.post("/seed_session", json={"task_id": "task", "rollout_id": "rollout"})
+    assert seeded.status_code == 200
+    response = client.post("/list_sheets", json={}, headers={"X-Spreadsheet-Operation-Id": "read"})
+    assert response.status_code == 200
+    assert "spreadsheet_test" in response.cookies

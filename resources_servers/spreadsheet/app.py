@@ -77,6 +77,9 @@ class SpreadsheetResourcesServer(SimpleResourcesServer):
         session = request.session.get("spreadsheet_session")
         if not session:
             raise HTTPException(409, "Call seed_session before using spreadsheet tools")
+        # Gym callers propagate response cookies. Starlette 1+ only refreshes
+        # them when the session is modified, including on read-only tool calls.
+        request.session["spreadsheet_session"] = session
         return session
 
     async def _operation(self, request, operation_id, action, arguments):
