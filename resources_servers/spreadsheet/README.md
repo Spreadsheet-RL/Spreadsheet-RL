@@ -169,6 +169,28 @@ on the service node. Pin the Hugging Face dataset commit and verify its files.
 Extract the archive outside the public bundle and Python chroot. Do not include
 both Hermes and Qwen-Coder versions of the same tasks.
 
+For the pinned public dataset revision
+`6f274cd4cbc27e656d7ddae7c3b591669866dc84`,
+[`packaging/prepare_dataset.py`](packaging/prepare_dataset.py) combines extraction,
+preparation, full oracle qualification and filtering of both Hermes splits. Run
+this standalone helper with the installed service Python, `PYTHONPATH` pointing
+at bundled source, `--download-root` pointing at the three downloaded dataset
+files, and `--work-root` pointing at node-local storage. Install bundled
+`pyarrow==22.0.0` offline first. It works with the published `9dcc7e1` source;
+rebuilding the runtime archive is unnecessary.
+
+The helper verifies the pinned downloads, validates archive paths/CRCs, and
+publishes completed extractions and preparation results atomically. Qualification
+prints progress and checkpoints every 25 tasks by default. Rerun the same command
+after interruption to reuse completed batches; keep the same helper, engine and
+batch size. An interrupted batch is recalculated from original oracle copies.
+Results are under `prepared-SP06/libreoffice/`: `manifest.qualified.jsonl`,
+`train.qualified.jsonl`, `test.qualified.jsonl`, and `compatibility.json`. The final
+`SP06_DATASET_READY` event follows a fresh check of qualified seed/oracle hashes.
+This gate does not establish Excel equivalence or arbitrary future formula
+compatibility. Keep reports private; the helper does not upload data or start
+the service.
+
 The following paths are examples; replace them with the node's actual paths.
 Use the wheelhouse to install pyarrow into the service venv without network:
 
