@@ -159,7 +159,8 @@ def _color(text: str):
 
 def execute(path: Path, name: str, args: dict):
     from openpyxl.cell.cell import MergedCell
-    from openpyxl.formula.translate import Translator
+    from openpyxl.formula.tokenizer import TokenizerError
+    from openpyxl.formula.translate import Translator, TranslatorError
     from openpyxl.styles import PatternFill, Side
     from openpyxl.utils.cell import column_index_from_string, get_column_letter
 
@@ -391,7 +392,7 @@ def execute(path: Path, name: str, args: dict):
             }
         wb.save(path)
         return result
-    except (KeyError, ValueError, TypeError, IndexError, AttributeError) as exc:
+    except (KeyError, ValueError, TypeError, IndexError, AttributeError, TokenizerError, TranslatorError) as exc:
         if isinstance(exc, ToolError):
             raise
         raise ToolError(str(exc)[:300]) from exc

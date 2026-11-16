@@ -48,6 +48,15 @@ def test_exact_summary_and_truncation(book):
     assert summary["empty"] == 594
 
 
+def test_malformed_formula_is_a_tool_error_without_workbook_mutation(book):
+    from resources_servers.spreadsheet.service.errors import ToolError
+
+    before = book.read_bytes()
+    with pytest.raises(ToolError):
+        call(book, "fill_formula", start_cell="A1", formula_template='=SUM("')
+    assert book.read_bytes() == before
+
+
 def test_sheet_names_commas_and_multiple_answer_regions():
     assert split_ranges("'Sales, East'!A1:B2,'O''Brien'!C3") == ["'Sales, East'!A1:B2", "'O''Brien'!C3"]
 
