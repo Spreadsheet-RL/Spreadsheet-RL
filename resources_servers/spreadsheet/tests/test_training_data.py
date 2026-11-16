@@ -38,6 +38,7 @@ def test_conversion_adds_agent_routing_and_preserves_the_entire_request():
         {"session_id": "static-session"},
         {"agent_ref": {"name": "different_agent"}},
         {"task_id": ""},
+        {"dataset_revision": ""},
     ],
 )
 def test_incompatible_rows_fail_instead_of_reusing_sessions_or_changing_agents(change):

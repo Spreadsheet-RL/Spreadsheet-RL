@@ -1,0 +1,19 @@
+{
+  "contract_id": "nemo-gym-raw-jsonl-v1",
+  "ast_python": "3.12",
+  "description": "The dataset wrapper stores a complete raw JSONL row in extra_env_info; the processor decodes it without another input wrapper.",
+  "required_row_fields": ["agent_ref", "task_id", "dataset_revision", "responses_create_params"],
+  "agent_ref": {"name": "spreadsheet_agent", "type": "responses_api_agents"},
+  "symbols": [
+    {
+      "path": "nemo_rl/data/datasets/response_datasets/nemogym_dataset.py",
+      "name": "NemoGymDataset",
+      "normalized_ast_sha256": "2be4668154207b0818ce07ee0a617c4c4d37a48065b5980b10f9be0651e2af3b"
+    },
+    {
+      "path": "nemo_rl/data/processors.py",
+      "name": "nemo_gym_data_processor",
+      "normalized_ast_sha256": "b5de350a2f498fc25a410a3bec85ff4886a99c81a37d70b93e574063e5259041"
+    }
+  ]
+}

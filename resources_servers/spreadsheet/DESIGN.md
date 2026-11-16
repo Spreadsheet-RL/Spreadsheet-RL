@@ -88,5 +88,5 @@ tasks out of training using a versioned compatibility manifest. A successful
 import, mocked test, or reachable HTTP port is not a passed Linux canary.
 
 Existing calculator changes and unrelated `pyproject.toml`/`uv.lock` edits remain
-in the original checkout. Work proceeds on `tung/feat/spreadsheet-libreoffice` in
+in the original checkout. Work proceeds on `tungks/feat/tool/spreadsheet-rl` in
 an isolated worktree. Local commits do not imply a GitHub push.

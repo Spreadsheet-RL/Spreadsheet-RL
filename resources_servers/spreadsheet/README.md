@@ -195,6 +195,16 @@ With `--trainer-config`, it backs up the YAML and changes only the single
 remaining YAML and leaves validation settings intact. Multiple training entries
 are rejected rather than implicitly replacing a dataset mixture. The helper uses
 only the standard library and does not install dependencies or launch training.
+`--trainer-root` is required in this mode: verification uses the versioned
+[`contracts/nemo_gym_raw_jsonl_v1.json`](contracts/nemo_gym_raw_jsonl_v1.json),
+not an inline terminal probe. Each run saves a private receipt with script,
+contract, source, input/output and YAML hashes, row counts, and backup location.
+
+The file-based integration entrypoints and their exact arguments/receipts are
+documented in [`packaging/README.md`](packaging/README.md). The source bundle
+includes both `resources_servers/spreadsheet` and
+`responses_api_agents/spreadsheet_agent`; a local source directory alone does not
+mean the training node has installed or imported them.
 
 For the pinned public dataset revision
 `6f274cd4cbc27e656d7ddae7c3b591669866dc84`,
