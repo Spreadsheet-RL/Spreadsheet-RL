@@ -57,7 +57,8 @@ def trace_summary(result):
                 summary = {"error_type": payload.get("error_type")}
                 message = payload.get("error") or payload.get("detail")
                 if isinstance(message, str):
-                    summary["message"] = message[:240]
+                    # Pydantic embeds tool arguments after this metadata marker.
+                    summary["message"] = message.split(" [type=", 1)[0][:240]
                 elif isinstance(message, list):
                     summary["validation"] = [
                         {"type": detail.get("type"), "loc": detail.get("loc")}
@@ -85,13 +86,16 @@ def analyze(root):
     audited = [json.loads(line) for line in audit_path.read_text().splitlines()] if audit_path.exists() else []
     remaining = list(audited)
     steps, traces, calls, problems, unrecognized = [], [], Counter(), [], []
-    advantage_values = []
+    advantage_stats = []
     for path in sorted((root / "logs").rglob("train_data_step*.jsonl")):
         step = int(path.stem.removeprefix("train_data_step"))
         rows = 0
         for line in path.read_text().splitlines():
             row = json.loads(line)
-            advantage_values.extend(float(value) for value in flatten(row.get("advantages", [])))
+            for value in flatten(row.get("advantages", [])):
+                advantage_stats.append(
+                    value if isinstance(value, dict) else {"count": 1, "min": float(value), "max": float(value)}
+                )
             values = row.get("full_result", [])
             if isinstance(values, str):
                 values = json.loads(values)
@@ -150,10 +154,16 @@ def analyze(root):
         "model_tool_calls": dict(calls),
         "reward_counts": dict(Counter(str(trace["reward"]) for trace in traces)),
         "advantages": {
-            "count": len(advantage_values),
-            "nonzero_count": sum(abs(value) > 1e-12 for value in advantage_values),
-            "min": min(advantage_values, default=None),
-            "max": max(advantage_values, default=None),
+            "sample_count": len(advantage_stats),
+            "all_zero_finite": bool(advantage_stats)
+            and all(
+                stats.get("count", 0) > 0
+                and stats.get("min") == stats.get("max") == 0
+                and not any(stats.get(key, 0) for key in ("num_nan", "num_pos_inf", "num_neg_inf"))
+                for stats in advantage_stats
+            ),
+            "min": min((stats["min"] for stats in advantage_stats if "min" in stats), default=None),
+            "max": max((stats["max"] for stats in advantage_stats if "max" in stats), default=None),
         },
         "tool_error_count": sum(trace["tool_errors"] for trace in traces),
         "environment_error_count": sum(trace["environment_errors"] for trace in traces),

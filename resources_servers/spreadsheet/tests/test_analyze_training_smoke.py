@@ -23,14 +23,18 @@ def test_audit_counts_only_model_outputs_and_reports_missing_tool_results():
 
 
 def test_http_validation_errors_are_counted_without_dumping_inputs():
-    payload = {"detail": [{"type": "missing", "loc": ["body", "sheet"], "input": "private-fixture"}]}
-    result = {
-        "reward": 0,
-        "response": {"output": [{"type": "function_call_output", "call_id": "bad", "output": json.dumps(payload)}]},
-    }
-    report = trace_summary(result)
-    assert report["tool_errors"] == 1
-    assert "private-fixture" not in json.dumps(report)
+    payloads = [
+        {"detail": [{"type": "missing", "loc": ["body", "sheet"], "input": "private-fixture"}]},
+        {"error": "Formula validation failed [type=string_pattern_mismatch, input_value='private-fixture']"},
+    ]
+    for payload in payloads:
+        result = {
+            "reward": 0,
+            "response": {"output": [{"type": "function_call_output", "call_id": "bad", "output": json.dumps(payload)}]},
+        }
+        report = trace_summary(result)
+        assert report["tool_errors"] == 1
+        assert "private-fixture" not in json.dumps(report)
 
 
 def test_audit_rejects_reward_mismatch_instead_of_reporting_a_pass(tmp_path):
@@ -60,12 +64,13 @@ def test_slim_trainer_results_match_agent_audit_without_counting_prefetch(tmp_pa
     (tmp_path / "logs").mkdir()
     for step in (1, 2):
         (tmp_path / f"logs/train_data_step{step}.jsonl").write_text(
-            json.dumps({"rewards": [1], "full_result": [prompt]})
+            json.dumps({"rewards": [1], "full_result": [prompt], "advantages": [{"count": 7, "min": 0.0, "max": 0.0}]})
         )
     report = analyze(tmp_path)
     assert report["problems"] == []
     assert report["model_tool_calls"] == {"read_sheet": 2}
     assert report["unconsumed_agent_audits"] == 1
+    assert report["advantages"]["all_zero_finite"] is True
     normalized = {
         "responses_create_params": {
             "input": [{"role": "user", "content": [{"type": "input_text", "text": "fixture"}]}]

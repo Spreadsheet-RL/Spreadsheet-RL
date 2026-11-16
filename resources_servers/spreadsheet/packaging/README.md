@@ -159,6 +159,8 @@ large token/logprob arrays. The smoke config selects this entrypoint through
 Gym's relative-entrypoint option and a single worker; the shared frontend source
 is unchanged. The analyzer matches prompt-content/reward multisets to training
 rows and excludes unused prefetched rollouts from its call counts.
+The report records advantage bounds too. All-zero advantages demonstrate
+tool/reward routing but do not demonstrate a useful policy learning update.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;
