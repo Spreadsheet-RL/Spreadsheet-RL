@@ -14,6 +14,7 @@ paths and private keys stay outside public release artifacts.
 | `install_gym_integration.py` | `--gym-root`, `--trainer-config`, `--private-config`, `--receipt`; optional `--source-root` | Install the two frontend modules, register spreadsheet config then private override, write file/config hashes |
 | `start_service.py` | Existing runtime bundle, qualified catalog, node-local service root and sandbox root receipt; optional `--export-private-config` | Start/reuse the API; export its Gym override to shared storage with mode 0600 |
 | `prepare_training_node.sh` | `TRAINER_ROOT NLTK_DATA TRAINER_CONFIG` followed by the Python options below | Use the existing activation/cache helper, install source/config, convert data and check existing frontend venv imports |
+| `prepare_cached_frontends.py` | `--venv-root`, `--expected-hostname`, `--receipt` | Copy the existing `math_with_judge` and `simple_agent` caches for the two new frontends; no installs or venv aliases |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
 Conversion, source installation and source packaging use only Python's standard
@@ -85,6 +86,17 @@ mechanism without creating custom aliases or another venv layout. The helper
 receives `UV_OFFLINE=1` and `PIP_NO_INDEX=1`; no network package bootstrap is
 needed. It finally imports the frontend modules from their existing sub-venvs
 and checks Ray/OpenAI versions against the existing model server's venv.
+
+The inspected project cache helper only recognizes relative resource config
+paths and does not prepare custom agents. Before invoking it, setup therefore
+copies the existing `math_with_judge` cache for `spreadsheet`, and the existing
+`simple_agent` cache for `spreadsheet_agent`, using `prepare_cached_frontends.py`.
+Complete existing destinations are reused; linked or incomplete destinations
+are preserved and rejected. This creates real cache copies without installing
+dependencies or modifying the project's helper. On a Bridge binding whose write
+root excludes the cache directory, an operator must run this standalone step
+first. It writes an owner-only receipt and must not be used to bypass the
+binding's filesystem policy.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;

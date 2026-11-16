@@ -262,8 +262,14 @@ def main():
     )
     save_receipt(run, receipt)
 
-    # Reuse the project's existing cache-copy mechanism, exactly as its launcher
-    # does. Do not invent another cache layout or create custom venv aliases.
+    # The project's helper only recognizes relative resource config paths and
+    # does not copy custom-agent caches. Fill those two known gaps by the same
+    # existing-cache copy recipe, then retain the launcher helper for the rest.
+    receipt.update(phase="prepare_frontend_caches")
+    save_receipt(run, receipt)
+    receipt["frontend_caches"] = sibling("prepare_cached_frontends").prepare(venv_root)
+    receipt.update(phase="reuse_existing_cache")
+    save_receipt(run, receipt)
     emit("REUSING_EXISTING_CACHE_HELPER", path=str(cache_helper))
     cache_log = run / "cache-copy.private.log"
     receipt["cache_log"] = str(cache_log)
