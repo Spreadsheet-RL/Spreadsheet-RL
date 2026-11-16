@@ -10,6 +10,33 @@ The implementation plan and invariants are in [DESIGN.md](DESIGN.md). The API
 contracts are in [schemas.py](schemas.py). This is a **LibreOffice backend**, not
 a claim of reproducing Microsoft Excel benchmark scores.
 
+## Qualified public bundle
+
+The [public HF runtime](https://huggingface.co/datasets/codemaivanngu/spreadsheet-gym-libreoffice-runtime)
+contains a 288,364,234-byte archive built from code commit
+`9dcc7e1aef517af8da352fcb7a56cf5baba28e1d`. Its immutable artifact revision is
+`a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1` and SHA-256 is
+`a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9`.
+
+Qualification passed 29 local tests, 34 Linux CPU tests, and the same 34 tests
+after offline installation in a clean Ubuntu container. The Linux runs skip
+Gym-specific tests (covered locally) and the non-root rejection case; local runs
+skip the real Linux/XLSX dependencies. Ruff and shell syntax checks passed.
+The actual company node, full dataset compatibility, live model rollout, training
+throughput, and Excel reward equivalence remain unverified.
+
+Run these commands **on the service node**, using its configured company proxy:
+
+```bash
+SPREADSHEET_BUNDLE_BASE=https://huggingface.co/datasets/codemaivanngu/spreadsheet-gym-libreoffice-runtime/resolve/a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1
+curl --fail --location --retry 3 "$SPREADSHEET_BUNDLE_BASE/SHA256SUMS" -o SHA256SUMS
+curl --fail --location --retry 3 "$SPREADSHEET_BUNDLE_BASE/spreadsheet-gym-ubuntu24.04-x86_64.tar.gz" -o spreadsheet-gym-ubuntu24.04-x86_64.tar.gz
+sha256sum -c SHA256SUMS
+tar -xzf spreadsheet-gym-ubuntu24.04-x86_64.tar.gz
+cd spreadsheet-gym-ubuntu24.04-x86_64
+bash install_offline.sh
+```
+
 ## Architecture
 
 ```mermaid

@@ -58,7 +58,7 @@ spreadsheet service.
 - [x] Tests: same-task isolation, retry after lost response, rollback, restart,
       multi-sheet formulas, oracle denial, and infrastructure-error classification.
 - [x] Build/qualify a CPU runtime on Modal for the target distro/architecture.
-- [ ] Publish a credential-free bundle, checksums, dependency/license notices,
+- [x] Publish a credential-free bundle, checksums, dependency/license notices,
       code/data provenance, and qualification receipt to a public HF repository.
 - [ ] User downloads through the company proxy; run readiness and a small canary
       on the target container before scaling RL.
