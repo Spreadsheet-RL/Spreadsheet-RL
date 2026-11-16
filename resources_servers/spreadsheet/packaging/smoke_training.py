@@ -1,6 +1,6 @@
 """Run a two-step NeMo-RL spreadsheet smoke using the existing container runtime.
 
-Writes only a fresh run directory and the explicitly declared short Ray root.
+Writes only a fresh run directory and an explicitly declared short IPC root.
 The training subprocess uses existing /opt actor venvs, offline local weights,
 an inherited smoke YAML, and redacted logs. This is not a quality benchmark.
 """
@@ -151,7 +151,6 @@ def clean_environment(root, ray_root, gym_root):
         "CUDA_CACHE_PATH": "cache/cuda",
         "XDG_CACHE_HOME": "cache/xdg",
         "UV_CACHE_DIR": "cache/uv",
-        "TMPDIR": "tmp",
     }
     for key, relative in paths.items():
         path = root / relative
@@ -159,8 +158,14 @@ def clean_environment(root, ray_root, gym_root):
         env[key] = str(path)
     if ray_root.name != "ray":
         raise ValueError("Use a fresh short <writeRoot>/ray directory")
-    if len(str(ray_root / "session_9999-99-99_99-99-99_999999_9999999/sockets/plasma_store.0").encode()) > 107:
+    # Ray 2.55 uses the unsuffixed plasma_store name in a fresh session.
+    if len(str(ray_root / "session_9999-99-99_99-99-99_999999_9999999/sockets/plasma_store").encode()) > 107:
         raise ValueError("Ray socket path is too long; select a shorter declared Ray root")
+    temp = ray_root.parent / "tmp"
+    if len(str(temp / "99999999-9999-9999-9999-999999999999").encode()) > 107:
+        raise ValueError("vLLM IPC socket path is too long; select a shorter IPC root")
+    temp.mkdir(mode=0o700)
+    env["TMPDIR"] = str(temp)
     env.update(
         RAY_TMPDIR=str(ray_root.parent),
         PYTHONDONTWRITEBYTECODE="1",
@@ -230,17 +235,19 @@ def redact_artifacts(roots, secrets):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("trainer-root", "base-config", "run-dir", "ray-root", "private-config"):
+    for name in ("trainer-root", "base-config", "run-dir", "ipc-root", "private-config"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-hostname", required=True)
     parser.add_argument("--max-wall-seconds", type=int, default=1800)
     args = parser.parse_args()
     if socket.gethostname() != args.expected_hostname:
         parser.error("Wrong training instance")
-    root, ray_root = args.run_dir.resolve(), args.ray_root.resolve()
-    if root.exists() or ray_root.exists():
-        parser.error("Run and Ray directories must both be fresh")
+    root, ipc_root = args.run_dir.resolve(), args.ipc_root.resolve()
+    ray_root = ipc_root / "ray"
+    if root.exists() or ipc_root.exists():
+        parser.error("Run and IPC directories must both be fresh")
     root.mkdir(mode=0o700)
+    ipc_root.mkdir(mode=0o700)
     from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
     from omegaconf import OmegaConf
 
@@ -292,6 +299,7 @@ def main():
         "requested_optimizer_steps": 2,
         "max_wall_seconds": args.max_wall_seconds,
         "log": str(root / "train.log"),
+        "ipc_root": str(ipc_root),
     }
     (root / "run.json").write_text(json.dumps(report, indent=2) + "\n")
     print(
@@ -347,7 +355,7 @@ def main():
         timed_out=timed_out.is_set(),
         elapsed_seconds=time.monotonic() - start,
         gpus_after=gpu_snapshot(),
-        redacted_artifacts=redact_artifacts((root, ray_root), secrets),
+        redacted_artifacts=redact_artifacts((root, ipc_root), secrets),
     )
     (root / "run.json").write_text(json.dumps(report, indent=2) + "\n")
     print(

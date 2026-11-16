@@ -140,6 +140,10 @@ writing `train.log`. `run.json` preserves config/data/source hashes, GPU UUIDs,
 driver ownership, duration and exit status. A successful process exit is not by
 itself proof of tool calls or correct rewards: inspect the retained Gym response
 JSONL and optimizer metrics before reporting an end-to-end pass.
+Pass a fresh short `--ipc-root` such as `/workspace/storage-shared/nlp/tungks/a`:
+both Ray and vLLM create Unix sockets subject to Linux's 107-byte path limit.
+The helper validates their path lengths and keeps temporary files in that root;
+the longer `--run-dir` still holds configuration, caches, logs and receipts.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;
