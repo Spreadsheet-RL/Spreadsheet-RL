@@ -62,8 +62,10 @@ spreadsheet service.
       code/data provenance, and qualification receipt to a public HF repository.
 - [x] User downloads through the company proxy and runs a target-container canary:
       34 passed, two expected skips; Python root placed on node-local storage.
-- [ ] Qualify the pinned dataset, start the persistent service, and validate a
-      live model rollout through the training container before scaling RL.
+- [x] Qualify the pinned dataset: 7,684/8,647 tasks retained (5,282 train,
+      2,402 test) under the published scorer and target LibreOffice version.
+- [ ] Start the persistent service and validate a live model rollout through the
+      training container before scaling RL.
 
 ## Runtime packaging
 

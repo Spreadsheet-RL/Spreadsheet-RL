@@ -24,8 +24,12 @@ Gym-specific tests (covered locally) and the non-root rejection case; local runs
 skip the real Linux/XLSX dependencies. Ruff and shell syntax checks passed.
 An operator-provided target-container run also passed 34 tests with the same two
 expected skips after placing the isolated Python root on node-local storage.
-Full dataset compatibility, live model rollout, training throughput, and Excel
-reward equivalence remain unverified.
+The operator's pinned dataset run checked 8,647 tasks and kept 7,684 under this
+scorer: 5,282 train and 2,402 test rows. The exclusions include observed cached
+value differences and parser/reader limits; they do not all establish LibreOffice
+calculation defects. The gate checks existing oracle values, not arbitrary future
+policy formulas. Live model rollout, training throughput, and Excel reward
+equivalence remain unverified.
 
 Run these commands **on the service node**, using its configured company proxy:
 download and extract the runtime on node-local executable storage. Dataset files
@@ -224,6 +228,23 @@ catalog aligned. The converter replaces the upstream format-specific system
 prompt with the actual tool/LibreOffice contract while retaining user task text.
 
 ## Configure and run
+
+The standalone [`packaging/start_service.py`](packaging/start_service.py) helper
+can initialize private configuration, start the bundled API in a separate process
+session, and save its PID/log/readiness receipts under `--service-root`. Run with
+the bundled service Python and `PYTHONPATH` pointing at its source. Supply the
+qualified manifest/report, dataset root, bundle path, Python-root receipt, and
+advertised service URL. State and service-root must be node-local. It checks that
+the URL's address belongs to this node and that the port is available before a
+new launch. It reuses a live process only when the module/config path and saved
+configuration/catalog hashes match. It never terminates another process or
+replaces existing private keys.
+
+Readiness checks use direct TCP without inherited proxies: matching engine and
+Python isolation, authenticated tool schemas, and rejection of anonymous tool
+access. Startup rechecks catalog file hashes and probes both engines, so it may
+take time before the port responds. A readiness receipt does not establish a
+cross-container connection or completed model rollout.
 
 Keep the Python root filesystem and service state on node-local storage. The
 state directory contains SQLite databases and locks; do not put it on Lustre or
