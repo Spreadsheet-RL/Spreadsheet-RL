@@ -22,6 +22,17 @@ def test_audit_counts_only_model_outputs_and_reports_missing_tool_results():
     assert report["tool_errors"] == 0
 
 
+def test_http_validation_errors_are_counted_without_dumping_inputs():
+    payload = {"detail": [{"type": "missing", "loc": ["body", "sheet"], "input": "private-fixture"}]}
+    result = {
+        "reward": 0,
+        "response": {"output": [{"type": "function_call_output", "call_id": "bad", "output": json.dumps(payload)}]},
+    }
+    report = trace_summary(result)
+    assert report["tool_errors"] == 1
+    assert "private-fixture" not in json.dumps(report)
+
+
 def test_audit_rejects_reward_mismatch_instead_of_reporting_a_pass(tmp_path):
     (tmp_path / "run.json").write_text(json.dumps({"exit_code": 0, "status": "exited"}))
     (tmp_path / "logs").mkdir()
