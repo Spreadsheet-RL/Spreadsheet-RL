@@ -19,7 +19,8 @@ fi
 # This is an offline package install in the existing container, not a Docker build.
 # Packages and their entire apt dependency closure were downloaded on Modal.
 export DEBIAN_FRONTEND=noninteractive
-apt-get -y --no-download --no-install-recommends install "$bundle_dir"/debs/*.deb
+apt-get -y --no-download --no-install-recommends \
+  -o "Dir::Cache::archives=$bundle_dir/debs" install "$bundle_dir"/debs/*.deb
 /usr/bin/python3 -m venv "$bundle_dir/service-venv"
 "$bundle_dir/service-venv/bin/python" -m pip install --no-index \
   --find-links "$bundle_dir/wheelhouse" \
