@@ -42,7 +42,7 @@ def main():
         "spreadsheet_resources:\n  resources_servers:\n    spreadsheet:\n"
         f"      service_url: {json.dumps(args.service_url)}\n"
         f"      api_key: {json.dumps(key)}\n"
-        f"      session_secret: {json.dumps(secrets.token_urlsafe(48))}\n"
+        f"      session_secret_key: {json.dumps(secrets.token_urlsafe(48))}\n"
     )
     write_private(destination / "gym.private.yaml", private)
     print("Created private service.json and gym.private.yaml. No secrets were printed.")

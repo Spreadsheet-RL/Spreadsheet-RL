@@ -14,6 +14,7 @@ import modal
 
 SOURCE = Path(__file__).resolve().parents[3] if modal.is_local() else Path("/source")
 app = modal.App("spreadsheet-gym-libreoffice-build")
+artifacts = modal.Volume.from_name("spreadsheet-gym-runtime-builds", create_if_missing=True)
 image = (
     modal.Image.from_registry("ubuntu:24.04", add_python="3.12")
     .apt_install("python3.12", "python3.12-venv", "libreoffice-calc", "python3-uno", "libseccomp2", "ca-certificates")
@@ -43,7 +44,69 @@ image = (
 )
 
 
-@app.function(image=image, cpu=2, memory=8192, timeout=1800)
+@app.function(
+    image=modal.Image.from_registry("ubuntu:24.04", add_python="3.12"),
+    volumes={"/artifacts": artifacts},
+    cpu=2,
+    memory=8192,
+    timeout=900,
+)
+def validate_clean(code_commit: str):
+    import os
+    import subprocess
+    import tarfile
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="offline-install-") as temporary:
+        archive = Path("/artifacts") / code_commit / "runtime.tar.gz"
+        with tarfile.open(archive) as tar:
+            tar.extractall(temporary, filter="data")
+        bundle = Path(temporary) / "spreadsheet-gym-ubuntu24.04-x86_64"
+        installed = subprocess.run(
+            ["bash", str(bundle / "install_offline.sh")],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=600,
+        )
+        if installed.returncode:
+            print(installed.stdout[-12000:], flush=True)
+            raise RuntimeError("Clean Ubuntu offline installation failed")
+        python = str(bundle / "service-venv/bin/python")
+        subprocess.run(
+            [
+                python,
+                "-m",
+                "pip",
+                "install",
+                "--no-index",
+                "--find-links",
+                str(bundle / "wheelhouse"),
+                "pytest==9.0.3",
+                "httpx==0.28.1",
+            ],
+            check=True,
+        )
+        tested = subprocess.run(
+            [python, "-m", "pytest", "-c", "/dev/null", "-q", "-ra", "resources_servers/spreadsheet/tests"],
+            cwd=bundle / "source",
+            env=dict(os.environ, SPREADSHEET_TEST_REAL_LO="1", SPREADSHEET_TEST_ROOTFS=str(bundle / "python-root")),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=180,
+        )
+        print(tested.stdout, flush=True)
+        if tested.returncode:
+            raise RuntimeError("Clean Ubuntu runtime canary failed")
+        return {
+            "offline_install_passed": True,
+            "test_exit_code": tested.returncode,
+            "test_summary": tested.stdout[-5000:],
+        }
+
+
+@app.function(image=image, volumes={"/artifacts": artifacts}, cpu=2, memory=8192, timeout=1800)
 def build(code_commit: str, publish_repo: str = ""):
     import hashlib
     import os
@@ -123,6 +186,7 @@ def build(code_commit: str, publish_repo: str = ""):
             "libreoffice-calc",
             "python3-uno",
             "libseccomp2",
+            "libc-bin",
         ],
         check=True,
     )
@@ -170,6 +234,11 @@ def build(code_commit: str, publish_repo: str = ""):
     archive = output / (bundle.name + ".tar.gz")
     with tarfile.open(archive, "w:gz", compresslevel=3) as tar:
         tar.add(bundle, arcname=bundle.name)
+    staging = Path("/artifacts") / code_commit
+    staging.mkdir(exist_ok=True)
+    shutil.copyfile(archive, staging / "runtime.tar.gz")
+    artifacts.commit()
+    receipt["clean_ubuntu_validation"] = validate_clean.remote(code_commit)
     digest = hashlib.file_digest(archive.open("rb"), "sha256").hexdigest()
     (output / "SHA256SUMS").write_text(digest + "  " + archive.name + "\n")
     (output / "qualification.json").write_text(json.dumps(receipt, indent=2))
@@ -200,6 +269,9 @@ def build(code_commit: str, publish_repo: str = ""):
         allow_patterns=[archive.name, "SHA256SUMS", "qualification.json", "README.md"],
         commit_message=f"Publish qualified spreadsheet runtime {code_commit[:12]}",
     )
+    (staging / "runtime.tar.gz").unlink()
+    staging.rmdir()
+    artifacts.commit()
     return {
         "qualified": True,
         "published": True,

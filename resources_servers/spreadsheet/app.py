@@ -22,7 +22,7 @@ from resources_servers.spreadsheet.schemas import TOOL_MODELS
 class SpreadsheetConfig(BaseResourcesServerConfig):
     service_url: str
     api_key: SecretStr = Field(min_length=32)
-    session_secret: SecretStr = Field(min_length=32)
+    session_secret_key: SecretStr = Field(min_length=32)
     operation_timeout: float = Field(default=300, gt=0, le=1800)
     poll_interval: float = Field(default=0.2, gt=0, le=10)
 
@@ -50,7 +50,7 @@ class SpreadsheetResourcesServer(SimpleResourcesServer):
     def setup_session_middleware(self, app: FastAPI):
         app.add_middleware(
             SessionMiddleware,
-            secret_key=self.config.session_secret.get_secret_value(),
+            secret_key=self.config.session_secret_key.get_secret_value(),
             session_cookie="spreadsheet_" + self.config.name,
         )
 
