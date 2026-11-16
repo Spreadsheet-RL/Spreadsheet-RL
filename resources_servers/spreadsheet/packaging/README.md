@@ -147,6 +147,18 @@ the longer `--run-dir` still holds configuration, caches, logs and receipts.
 `smoke_driver.py` supplies the existing NeMo-RL `init_ray(log_dir=...)` hook so
 Ray's dashboard sockets also fit. It then runs the unchanged training entrypoint;
 no trainer source or global Ray configuration is modified.
+After the run, `analyze_training_smoke.py --run-dir RUN --output NEW_REPORT.json`
+counts only model `response.output` tool calls and compares verifier rewards to
+the retained training rewards. It reports tool/environment errors and missing
+responses without printing workbook contents. Optimizer metrics need separate
+inspection; this audit does not infer updates from filenames or an exit code.
+Some trainer checkouts hardcode `full_result` to retain only prompt inputs.
+For this case, `audit_agent.py` subclasses the existing agent and appends its
+unmodified verifier result to the private run's `model_rollouts.jsonl`, omitting
+large token/logprob arrays. The smoke config selects this entrypoint through
+Gym's relative-entrypoint option and a single worker; the shared frontend source
+is unchanged. The analyzer matches prompt-content/reward multisets to training
+rows and excludes unused prefetched rollouts from its call counts.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;

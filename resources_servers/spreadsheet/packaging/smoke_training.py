@@ -266,6 +266,15 @@ def main():
     subset = root / "train.jsonl"
     subset.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
     overrides = smoke_overrides(base, root, subset, metadata)
+    from nemo_gym import PARENT_DIR as gym_source
+
+    audit_agent = Path(__file__).with_name("audit_agent.py")
+    agent = overrides["env"]["nemo_gym"]["spreadsheet_agent"]["responses_api_agents"]["spreadsheet_agent"]
+    agent.update(
+        entrypoint=os.path.relpath(audit_agent, gym_source / "responses_api_agents/spreadsheet_agent"),
+        num_workers=1,
+        audit_path=str(root / "model_rollouts.jsonl"),
+    )
     overrides = {"defaults": str(args.base_config.resolve()), **overrides}
     config = root / "smoke.yaml"
     config.write_text(OmegaConf.to_yaml(OmegaConf.create(overrides), resolve=False))
@@ -295,6 +304,7 @@ def main():
         "task_ids": [row["task_id"] for row in rows],
         "entrypoint_sha256": sha(entry),
         "driver_sha256": sha(driver),
+        "audit_agent_sha256": sha(audit_agent),
         "gpus_before": before,
         "requested_optimizer_steps": 2,
         "max_wall_seconds": args.max_wall_seconds,
