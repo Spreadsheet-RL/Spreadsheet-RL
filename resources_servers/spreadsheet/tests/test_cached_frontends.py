@@ -1,3 +1,4 @@
+import shlex
 from pathlib import Path
 
 import pytest
@@ -52,3 +53,30 @@ def test_linked_source_root_is_copied_without_creating_a_venv_alias(tmp_path):
         target = tmp_path / destination / ".venv"
         assert not target.is_symlink()
         assert (target / "bin/python-alias").is_symlink()
+
+
+def test_project_caches_include_model_and_activate_the_new_locations(tmp_path):
+    source, project = tmp_path / "source", tmp_path / "project cache"
+    mappings = cache.CACHES + (("responses_api_models/vllm_model", "responses_api_models/vllm_model"),)
+    for original, _ in mappings:
+        path = base(source, original)
+        (path / "bin/activate").write_text("# fixture\nVIRTUAL_ENV='/original/cache'\nexport VIRTUAL_ENV\n")
+    result = cache.prepare(project, source, include_model=True, relocate=True)
+    assert len(result) == 3 and all(item["status"] == "copied" for item in result)
+    for original, destination in mappings:
+        target = project / destination / ".venv"
+        assert "VIRTUAL_ENV=" + shlex.quote(str(target)) in (target / "bin/activate").read_text().splitlines()
+        assert "VIRTUAL_ENV='/original/cache'" in (source / original / ".venv/bin/activate").read_text()
+    assert all(
+        item["status"] == "reused" for item in cache.prepare(project, source, include_model=True, relocate=True)
+    )
+
+
+def test_project_cache_rejects_missing_model_before_copying_any_frontend(tmp_path):
+    source, target = tmp_path / "source", tmp_path / "project"
+    for original, _ in cache.CACHES:
+        path = base(source, original)
+        (path / "bin/activate").write_text("VIRTUAL_ENV='/original'\n")
+    with pytest.raises(ValueError, match="vllm_model"):
+        cache.prepare(target, source, include_model=True, relocate=True)
+    assert not target.exists()

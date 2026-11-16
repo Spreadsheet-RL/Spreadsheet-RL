@@ -15,6 +15,7 @@ paths and private keys stay outside public release artifacts.
 | `start_service.py` | Existing runtime bundle, qualified catalog, node-local service root and sandbox root receipt; optional `--export-private-config` | Start/reuse the API; export its Gym override to shared storage with mode 0600 |
 | `prepare_training_node.sh` | `TRAINER_ROOT NLTK_DATA TRAINER_CONFIG` followed by the Python options below | Use the existing activation/cache helper, install source/config, convert data and check existing frontend venv imports |
 | `prepare_cached_frontends.py` | `--venv-root`, `--expected-hostname`, `--receipt` | Copy the existing `math_with_judge` and `simple_agent` caches for the two new frontends; no installs or venv aliases |
+| `prepare_project_runtime.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--runtime-root`, `--qualified-dir`, `--output-dir`, `--private-config`, `--expected-hostname` | Prepare project-local caches and an inherited YAML; verify existing integration/data without modifying their files |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
 Conversion, source installation and source packaging use only Python's standard
@@ -94,9 +95,32 @@ copies the existing `math_with_judge` cache for `spreadsheet`, and the existing
 Complete existing destinations are reused; linked or incomplete destinations
 are preserved and rejected. This creates real cache copies without installing
 dependencies or modifying the project's helper. On a Bridge binding whose write
-root excludes the cache directory, an operator must run this standalone step
-first. It writes an owner-only receipt and must not be used to bypass the
-binding's filesystem policy.
+root excludes the cache directory, use the project-local runtime below instead
+of writing outside the binding policy. The standalone cache copier also accepts
+`--source-root`, `--include-model`, and `--relocate-activation` for copying an
+existing cache into a new location.
+
+## Project-local runtime under an existing Bridge scope
+
+`prepare_project_runtime.sh` sources the existing import activation and invokes
+`prepare_project_runtime.py`. The active trainer must already have the matching
+spreadsheet frontend sources, config paths, and verified converted data. It
+checks these prerequisites without installing source, patching the base YAML,
+recalculating workbooks, or recreating data.
+
+All persistent writes are below the fresh `--runtime-root`. It copies existing
+`math_with_judge`, `simple_agent`, and `vllm_model` caches from
+`--source-cache-root` (default `/opt/gym_venvs`) into the project's resource,
+agent, and model cache directories. Only copied Bash activation scripts are
+retargeted. Import probes require the copied interpreter prefixes and matching
+Ray/OpenAI versions. Python bytecode writes are disabled during preparation and
+probes.
+
+The new `spreadsheet.yaml` inherits `--base-config` and overrides only
+`env.nemo_gym.uv_venv_dir`. Setup verifies the complete effective configuration
+equals the base with that single change. Use this generated YAML when launching
+training. `setup.json` pins the base/config/source/data hashes and live service
+health. `TRAINING_NODE_PREPARED` confirms preparation; no training is launched.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;

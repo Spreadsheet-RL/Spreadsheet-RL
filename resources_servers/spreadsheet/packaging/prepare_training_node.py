@@ -80,7 +80,7 @@ print("SPREADSHEET_IMPORT_PROBE=" + json.dumps(result))
             "--noprofile",
             "--norc",
             "-c",
-            'source "$1/bin/activate" >/dev/null 2>&1 || exit 125; exec python -I -c "$2" "$3" "$4"',
+            'source "$1/bin/activate" >/dev/null 2>&1 || exit 125; exec python -I -B -c "$2" "$3" "$4"',
             "spreadsheet-import-check",
             str(venv),
             code,

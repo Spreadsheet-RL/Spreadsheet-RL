@@ -212,6 +212,12 @@ To reuse the current training environment, invoke the versioned
 data, and delegates cache reuse to the existing `copy_gym_venvs.sh`, then checks
 imports. It preserves the launcher's environment layout and starts no training.
 
+When an execution scope excludes the existing system cache, use
+`packaging/prepare_project_runtime.sh` to copy the required cached environments
+into a fresh project directory. It generates an inherited trainer YAML that
+changes only `env.nemo_gym.uv_venv_dir`, and verifies existing source/data and
+frontend imports without editing the base trainer configuration or system cache.
+
 For the pinned public dataset revision
 `6f274cd4cbc27e656d7ddae7c3b591669866dc84`,
 [`packaging/prepare_dataset.py`](packaging/prepare_dataset.py) combines extraction,
