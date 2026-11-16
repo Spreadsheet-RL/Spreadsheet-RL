@@ -17,6 +17,7 @@ paths and private keys stay outside public release artifacts.
 | `prepare_cached_frontends.py` | `--venv-root`, `--expected-hostname`, `--receipt` | Copy the existing `math_with_judge` and `simple_agent` caches for the two new frontends; no installs or venv aliases |
 | `prepare_project_runtime.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--runtime-root`, `--qualified-dir`, `--output-dir`, `--private-config`, `--expected-hostname` | Prepare project-local caches and an inherited YAML; verify existing integration/data without modifying their files |
 | `check_live_service.py` | `--private-config`, `--dataset`, `--manifest`, `--data-root`, fresh `--output-dir`, `--expected-hostname` | Trusted HTTP canary covering all 12 tools, isolation, recalc, replay and reward; separate from model rollouts |
+| `smoke_training.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--run-dir`, short fresh `--ray-root`, `--private-config`, `--expected-hostname` | Two optimizer steps with two prompts and two generations each; existing weights/actor venvs, separate logs, disabled checkpoints and external logging |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
 Conversion, source installation and source packaging use only Python's standard
@@ -128,6 +129,17 @@ exercises only a temporary QA sheet, removes it before verification, checks the
 original seed/oracle hashes, and closes both sessions. Its tool calls are trusted
 test actions and must never be counted as model-generated actions or mixed into
 training data. A report preserves operation IDs and any unconfirmed cleanup.
+
+The training smoke uses the first four unchanged converted rows, a generated
+inherited YAML, and the model's actual tokenizer tool format/EOS. It prunes
+unrelated inherited judge definitions, limits generation concurrency and agent
+turns, and preserves the existing asynchronous Megatron/vLLM setup. It requires
+idle allocated GPUs and all prebuilt actor environments; no dependency bootstrap
+is attempted. Known service credentials are removed from captured stdout before
+writing `train.log`. `run.json` preserves config/data/source hashes, GPU UUIDs,
+driver ownership, duration and exit status. A successful process exit is not by
+itself proof of tool calls or correct rewards: inspect the retained Gym response
+JSONL and optimizer metrics before reporting an end-to-end pass.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;
