@@ -62,6 +62,7 @@ def prepare(parquets, data_root, output_dir, revision, skip_missing=False):
             ]
             rows.append(
                 {
+                    "agent_ref": {"name": "spreadsheet_agent", "type": "responses_api_agents"},
                     "task_id": task_id,
                     "dataset_revision": revision,
                     "responses_create_params": {

@@ -173,6 +173,29 @@ on the service node. Pin the Hugging Face dataset commit and verify its files.
 Extract the archive outside the public bundle and Python chroot. Do not include
 both Hermes and Qwen-Coder versions of the same tasks.
 
+Each training JSONL row is a flat Gym request with `agent_ref` set to
+`{"name": "spreadsheet_agent", "type": "responses_api_agents"}`, plus `task_id`,
+`dataset_revision`, and `responses_create_params` containing the prompt and tools.
+The raw-JSONL `NemoGymDataset` wrapper places the complete row in `extra_env_info`;
+do not add another `extra_env_info` wrapper to the input file. Confirm that the
+active trainer still uses this contract before changing its data path.
+
+The published `9dcc7e1` preparation code predates `agent_ref` in its output. For
+already-qualified data, the standalone
+[`packaging/convert_training_data.py`](packaging/convert_training_data.py) reads
+`train.qualified.jsonl` and `test.qualified.jsonl` from `--input-dir` and writes
+`train.jsonl`, `test.jsonl`, and a hash/count receipt under `--output-dir`. It
+preserves task IDs, revisions, prompts, and tool schemas. It rejects static
+rollout/session identities and conflicting agent routing. Existing converted
+files are reused only when their input/output hashes match. No recalculation is
+needed for this data-format correction.
+
+With `--trainer-config`, it backs up the YAML and changes only the single
+`data.train` entry's `data_path` to the converted training file. It preserves the
+remaining YAML and leaves validation settings intact. Multiple training entries
+are rejected rather than implicitly replacing a dataset mixture. The helper uses
+only the standard library and does not install dependencies or launch training.
+
 For the pinned public dataset revision
 `6f274cd4cbc27e656d7ddae7c3b591669866dc84`,
 [`packaging/prepare_dataset.py`](packaging/prepare_dataset.py) combines extraction,
