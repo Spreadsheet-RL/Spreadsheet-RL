@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -45,6 +46,39 @@ def test_setup_receipt_records_incomplete_phase_before_success(tmp_path):
     receipt.update(status="prepared", phase="complete")
     setup.save_receipt(tmp_path, receipt)
     assert json.loads((tmp_path / "setup.json").read_text())["status"] == "prepared"
+
+
+@pytest.mark.parametrize("exit_code", [0, 7])
+def test_cache_helper_runs_with_a_private_log_and_preserves_its_status(tmp_path, capsys, exit_code):
+    config = tmp_path / "train config.yaml"
+    config.touch()
+    helper = tmp_path / "copy_gym_venvs.sh"
+    helper.write_text(
+        'test -f "$1" || exit 91\n'
+        'test "$UV_OFFLINE:$PIP_NO_INDEX" = "1:1" || exit 92\n'
+        'echo "fixture-private-stdout"\n'
+        'echo "fixture-private-stderr" >&2\n'
+        f"exit {exit_code}\n"
+    )
+    log = tmp_path / "cache-copy.private.log"
+    previous_umask = os.umask(0)
+    try:
+        result = setup.run_cache_helper(helper, config, log)
+    finally:
+        os.umask(previous_umask)
+    assert result.returncode == exit_code
+    assert log.read_text().splitlines() == ["fixture-private-stdout", "fixture-private-stderr"]
+    assert log.stat().st_mode & 0o777 == 0o600
+    captured = capsys.readouterr()
+    assert not captured.out and not captured.err
+
+
+def test_cache_helper_does_not_overwrite_an_existing_log(tmp_path):
+    log = tmp_path / "cache-copy.private.log"
+    log.write_text("original fixture evidence")
+    with pytest.raises(FileExistsError):
+        setup.run_cache_helper(tmp_path / "missing-helper.sh", tmp_path / "train.yaml", log)
+    assert log.read_text() == "original fixture evidence"
 
 
 def test_actual_cached_runtime_imports_the_spreadsheet_frontends():

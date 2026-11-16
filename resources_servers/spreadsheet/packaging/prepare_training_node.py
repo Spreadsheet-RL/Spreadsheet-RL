@@ -37,6 +37,19 @@ def save_receipt(run, value):
     temporary.replace(run / "setup.json")
 
 
+def run_cache_helper(cache_helper, trainer_config, cache_log):
+    env = dict(os.environ, UV_OFFLINE="1", PIP_NO_INDEX="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
+    # pathlib.Path.open does not accept opener; the builtin open does.
+    with open(cache_log, "x", opener=lambda path, flags: os.open(path, flags, 0o600)) as log:
+        return subprocess.run(
+            ["bash", str(cache_helper), str(trainer_config)],
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            timeout=1800,
+        )
+
+
 def probe_venv(venv, gym_root, module_name=None):
     if not (venv / "bin/python").is_file() or not (venv / "bin/activate").is_file():
         raise ValueError(f"Existing Gym sub-venv is missing: {venv}")
@@ -252,18 +265,10 @@ def main():
     # Reuse the project's existing cache-copy mechanism, exactly as its launcher
     # does. Do not invent another cache layout or create custom venv aliases.
     emit("REUSING_EXISTING_CACHE_HELPER", path=str(cache_helper))
-    env = dict(os.environ, UV_OFFLINE="1", PIP_NO_INDEX="1", PIP_DISABLE_PIP_VERSION_CHECK="1")
     cache_log = run / "cache-copy.private.log"
     receipt["cache_log"] = str(cache_log)
     save_receipt(run, receipt)
-    with cache_log.open("x", opener=lambda path, flags: os.open(path, flags, 0o600)) as log:
-        completed = subprocess.run(
-            ["bash", str(cache_helper), str(args.trainer_config)],
-            env=env,
-            stdout=log,
-            stderr=subprocess.STDOUT,
-            timeout=1800,
-        )
+    completed = run_cache_helper(cache_helper, args.trainer_config, cache_log)
     if completed.returncode:
         receipt.update(status="failed", cache_helper_exit_code=completed.returncode)
         save_receipt(run, receipt)
