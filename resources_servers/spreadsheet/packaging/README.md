@@ -16,6 +16,7 @@ paths and private keys stay outside public release artifacts.
 | `prepare_training_node.sh` | `TRAINER_ROOT NLTK_DATA TRAINER_CONFIG` followed by the Python options below | Use the existing activation/cache helper, install source/config, convert data and check existing frontend venv imports |
 | `prepare_cached_frontends.py` | `--venv-root`, `--expected-hostname`, `--receipt` | Copy the existing `math_with_judge` and `simple_agent` caches for the two new frontends; no installs or venv aliases |
 | `prepare_project_runtime.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--runtime-root`, `--qualified-dir`, `--output-dir`, `--private-config`, `--expected-hostname` | Prepare project-local caches and an inherited YAML; verify existing integration/data without modifying their files |
+| `check_live_service.py` | `--private-config`, `--dataset`, `--manifest`, `--data-root`, fresh `--output-dir`, `--expected-hostname` | Trusted HTTP canary covering all 12 tools, isolation, recalc, replay and reward; separate from model rollouts |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
 Conversion, source installation and source packaging use only Python's standard
@@ -121,6 +122,12 @@ The new `spreadsheet.yaml` inherits `--base-config` and overrides only
 equals the base with that single change. Use this generated YAML when launching
 training. `setup.json` pins the base/config/source/data hashes and live service
 health. `TRAINING_NODE_PREPARED` confirms preparation; no training is launched.
+
+The live service canary creates two fresh sessions from one qualified task. It
+exercises only a temporary QA sheet, removes it before verification, checks the
+original seed/oracle hashes, and closes both sessions. Its tool calls are trusted
+test actions and must never be counted as model-generated actions or mixed into
+training data. A report preserves operation IDs and any unconfirmed cleanup.
 
 Each invocation saves a private phase receipt and cache-helper log under a
 unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;
