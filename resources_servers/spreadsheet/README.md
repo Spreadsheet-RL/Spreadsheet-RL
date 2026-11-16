@@ -22,10 +22,14 @@ Qualification passed 29 local tests, 34 Linux CPU tests, and the same 34 tests
 after offline installation in a clean Ubuntu container. The Linux runs skip
 Gym-specific tests (covered locally) and the non-root rejection case; local runs
 skip the real Linux/XLSX dependencies. Ruff and shell syntax checks passed.
-The actual company node, full dataset compatibility, live model rollout, training
-throughput, and Excel reward equivalence remain unverified.
+An operator-provided target-container run also passed 34 tests with the same two
+expected skips after placing the isolated Python root on node-local storage.
+Full dataset compatibility, live model rollout, training throughput, and Excel
+reward equivalence remain unverified.
 
 Run these commands **on the service node**, using its configured company proxy:
+download and extract the runtime on node-local executable storage. Dataset files
+and prepared manifests may remain on shared storage.
 
 ```bash
 SPREADSHEET_BUNDLE_BASE=https://huggingface.co/datasets/codemaivanngu/spreadsheet-gym-libreoffice-runtime/resolve/a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1
@@ -199,18 +203,33 @@ prompt with the actual tool/LibreOffice contract while retaining user task text.
 
 ## Configure and run
 
+Keep the Python root filesystem and service state on node-local storage. The
+state directory contains SQLite databases and locks; do not put it on Lustre or
+NFS. A target canary failed to execute Python from its shared filesystem after
+dropping privileges, but passed with the same root copied to local storage with
+clean ownership, modes, ACLs, and extended attributes. This does not establish
+that every shared filesystem is mounted `noexec`.
+
+If the offline installer has already installed dependencies and created
+`service-venv`, a failed final isolation probe does not require reinstalling.
+Copy the Python root to a fresh node-local directory, preserve root ownership and
+the builder's directory/file modes, remove inherited ACLs and extended
+attributes, and repeat the real isolation canary. Configure the service with the
+local root only after that canary passes. Do not relax isolation policies to
+work around filesystem execution failures.
+
 Create private keys/config locally on the service node:
 
 ```bash
 ../service-venv/bin/python -m resources_servers.spreadsheet.init_service \
   --data-root /srv/spreadsheet/data \
   --manifest /srv/spreadsheet/prepared/manifest.qualified.jsonl \
-  --state-root /srv/spreadsheet/state --config-dir /srv/spreadsheet/private \
-  --python-rootfs "$(cd ../python-root && pwd)" \
+  --state-root /opt/spreadsheet-gym/state --config-dir /opt/spreadsheet-gym/private \
+  --python-rootfs /opt/spreadsheet-gym/python-root \
   --service-url http://SERVICE_IP:8088
 
 ../service-venv/bin/python -m resources_servers.spreadsheet.service.app \
-  --config /srv/spreadsheet/private/service.json
+  --config /opt/spreadsheet-gym/private/service.json
 ```
 
 The service binds `0.0.0.0:8088`; advertise its routable IP to the train container.

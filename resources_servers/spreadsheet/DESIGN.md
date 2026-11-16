@@ -60,8 +60,10 @@ spreadsheet service.
 - [x] Build/qualify a CPU runtime on Modal for the target distro/architecture.
 - [x] Publish a credential-free bundle, checksums, dependency/license notices,
       code/data provenance, and qualification receipt to a public HF repository.
-- [ ] User downloads through the company proxy; run readiness and a small canary
-      on the target container before scaling RL.
+- [x] User downloads through the company proxy and runs a target-container canary:
+      34 passed, two expected skips; Python root placed on node-local storage.
+- [ ] Qualify the pinned dataset, start the persistent service, and validate a
+      live model rollout through the training container before scaling RL.
 
 ## Runtime packaging
 
