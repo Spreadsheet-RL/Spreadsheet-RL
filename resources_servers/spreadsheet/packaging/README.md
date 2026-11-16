@@ -12,11 +12,14 @@ paths and private keys stay outside public release artifacts.
 | `convert_training_data.py` | `--input-dir` containing both qualified JSONL files; `--output-dir` | Routed `train.jsonl` / `test.jsonl`, conversion hashes and a separate run receipt |
 | Same, with YAML update | Also `--trainer-root` and `--trainer-config`; optional `--contract` | Verify pinned dataset/processor AST first, back up YAML, replace only its single training data path |
 | `install_gym_integration.py` | `--gym-root`, `--trainer-config`, `--private-config`, `--receipt`; optional `--source-root` | Install the two frontend modules, register spreadsheet config then private override, write file/config hashes |
+| `start_service.py` | Existing runtime bundle, qualified catalog, node-local service root and sandbox root receipt; optional `--export-private-config` | Start/reuse the API; export its Gym override to shared storage with mode 0600 |
+| `prepare_training_node.sh` | `TRAINER_ROOT NLTK_DATA TRAINER_CONFIG` followed by the Python options below | Use the existing activation/cache helper, install source/config, convert data and check existing frontend venv imports |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
-All three entrypoints use only Python's standard library. Conversion and source
-installation do not require `git`, PyYAML, LibreOffice, CUDA, or package downloads
-on the node. The source-bundle builder uses Git on the development machine.
+Conversion, source installation and source packaging use only Python's standard
+library. Conversion and source installation do not require `git`, PyYAML,
+LibreOffice, CUDA, or package downloads on the node. The source-bundle builder
+uses Git on the development machine.
 
 ## Dataset contract and receipts
 
@@ -61,6 +64,39 @@ existing Gym sub-venvs according to the active trainer's cache helper; this
 installer does not provision them. Its receipt explicitly records
 `runtime_import_check: not_run` and `training: not_started`. Verify imports and
 one real tool/reward rollout in the training runtime before claiming readiness.
+
+## Reuse the existing training launcher environment
+
+The node wrapper sources the existing
+`custom_utils/utils_training/use_custom_opt.sh TRAINER_ROOT NLTK_DATA`, from the
+training YAML's directory, just like the current launcher. It invokes
+`prepare_training_node.py` with that active Python. The helper requires
+`--qualified-dir`, `--output-dir`, `--private-config`, `--run-dir`, and
+`--expected-hostname`; the wrapper supplies `--trainer-root` and
+`--trainer-config`. The active interpreter must already import the selected
+`nemo_rl` checkout and `nemo_gym`.
+
+Before mutation, it checks the dataset contract, existing cache helper,
+`skip_venv_if_present: true`, and direct connectivity to the qualified service.
+It then installs the frontend files, appends Gym config paths, converts both
+splits, patches the single training data path, and runs the existing
+`copy_gym_venvs.sh TRAINER_CONFIG`. This delegates to the project's cache
+mechanism without creating custom aliases or another venv layout. The helper
+receives `UV_OFFLINE=1` and `PIP_NO_INDEX=1`; no network package bootstrap is
+needed. It finally imports the frontend modules from their existing sub-venvs
+and checks Ray/OpenAI versions against the existing model server's venv.
+
+Each invocation saves a private phase receipt and cache-helper log under a
+unique setup directory. `TRAINING_NODE_PREPARED` means these setup checks passed;
+the script does not launch training or prove a completed policy rollout.
+
+Both nodes may read the same dataset/source on shared storage. Use
+`start_service.py --export-private-config SHARED_PATH` once on the service node
+to make its existing Gym override accessible to the trainer with mode 0600.
+It refuses to replace different credentials. Keep this file out of public
+archives. Python sandbox executables and the API's SQLite/lock state remain on
+node-local storage; those constraints do not require private copies of the
+dataset or source on each node.
 
 ## Source release contents
 

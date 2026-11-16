@@ -36,6 +36,21 @@ def write_json(path, value):
     temporary.replace(path)
 
 
+def export_private_config(source, destination):
+    """Publish the existing Gym override to operator-selected shared storage."""
+    body = source.read_bytes()
+    destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if destination.exists() or destination.is_symlink():
+        if destination.is_symlink() or destination.read_bytes() != body:
+            raise ValueError("Shared private config differs; refusing to replace existing credentials")
+        if destination.stat().st_mode & 0o077:
+            raise ValueError("Shared private config must have owner-only permissions")
+        return
+    descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        stream.write(body)
+
+
 def owned_process(pid, config, proc_root=Path("/proc")):
     if type(pid) is not int or pid <= 1:
         return False
@@ -261,6 +276,9 @@ def start(args):
             "gym_private_config": str(private / "gym.private.yaml"),
             "log": str(log),
         }
+        if args.export_private_config:
+            export_private_config(private / "gym.private.yaml", args.export_private_config)
+            ready["shared_gym_private_config"] = str(args.export_private_config.resolve())
         write_json(root / "readiness-SP08.json", ready)
         emit("SP08_SERVICE_READY", **ready)
 
@@ -271,6 +289,9 @@ def main():
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--service-url", required=True)
     parser.add_argument("--startup-timeout", type=int, default=600)
+    parser.add_argument(
+        "--export-private-config", type=Path, help="Write the existing Gym override to shared storage, mode 0600"
+    )
     args = parser.parse_args()
     if not 1 <= args.startup_timeout <= 1800:
         parser.error("startup-timeout must be 1–1800 seconds")

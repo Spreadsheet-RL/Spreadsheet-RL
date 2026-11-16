@@ -206,6 +206,12 @@ includes both `resources_servers/spreadsheet` and
 `responses_api_agents/spreadsheet_agent`; a local source directory alone does not
 mean the training node has installed or imported them.
 
+To reuse the current training environment, invoke the versioned
+`packaging/prepare_training_node.sh` wrapper. It sources the existing
+`use_custom_opt.sh`, installs the two frontend modules/config paths, converts
+data, and delegates cache reuse to the existing `copy_gym_venvs.sh`, then checks
+imports. It preserves the launcher's environment layout and starts no training.
+
 For the pinned public dataset revision
 `6f274cd4cbc27e656d7ddae7c3b591669866dc84`,
 [`packaging/prepare_dataset.py`](packaging/prepare_dataset.py) combines extraction,
@@ -273,6 +279,10 @@ new launch. It reuses a live process only when the module/config path and saved
 configuration/catalog hashes match. It never terminates another process or
 replaces existing private keys.
 
+When both nodes share storage, `--export-private-config SHARED_PATH` writes the
+existing `gym.private.yaml` there with mode 0600. Dataset/source paths may also
+be shared. The Python sandbox root and service SQLite/lock state stay local.
+
 Readiness checks use direct TCP without inherited proxies: matching engine and
 Python isolation, authenticated tool schemas, and rejection of anonymous tool
 access. Startup rechecks catalog file hashes and probes both engines, so it may
@@ -315,9 +325,10 @@ readiness, engine version, and isolation backend; it does not prove a training
 rollout has passed. UNO uses private local pipes, not a public network port.
 
 Copy this integration's two source directories into the matching Gym checkout on
-the training node. Transfer `gym.private.yaml` privately to that node; never post
-or upload it. Load the common model config, `configs/spreadsheet.yaml`, and this
-private override using the existing Gym launch/training workflow. The adapter
+the training node. Keep `gym.private.yaml` at a private path readable by that
+node, including shared storage; never post or upload it. Load the common model
+config, `configs/spreadsheet.yaml`, and this private override using the existing
+Gym launch/training workflow. The adapter
 needs only Gym dependencies. Configure the training dataset to the filtered Gym
 JSONL. Do not point the model directly at the service's internal job API.
 
