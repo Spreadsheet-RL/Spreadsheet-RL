@@ -1,0 +1,5 @@
+# CPU service only. Gym, torch, and verl are not needed in the service container.
+fastapi==0.135.2
+uvicorn==0.35.0
+pydantic==2.12.5
+openpyxl==3.1.5

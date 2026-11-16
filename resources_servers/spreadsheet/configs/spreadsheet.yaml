@@ -1,0 +1,23 @@
+spreadsheet_resources:
+  resources_servers:
+    spreadsheet:
+      entrypoint: app.py
+      domain: agent
+      verified: false
+      description: Stateful spreadsheet tools and remote LibreOffice rewards
+      service_url: http://SERVICE_IP:8088
+      # Supply both secrets via private Gym config; never dataset/model arguments.
+      api_key: ???
+      session_secret: ???
+      operation_timeout: 300
+spreadsheet_agent:
+  responses_api_agents:
+    spreadsheet_agent:
+      entrypoint: app.py
+      max_steps: 15
+      resources_server:
+        type: resources_servers
+        name: spreadsheet_resources
+      model_server:
+        type: responses_api_models
+        name: policy_model
