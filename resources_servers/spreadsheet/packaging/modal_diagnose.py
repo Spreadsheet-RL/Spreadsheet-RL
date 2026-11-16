@@ -2,10 +2,12 @@
 
 import json
 import sys
+from pathlib import Path
 
 import modal
 
-from resources_servers.spreadsheet.packaging.modal_build import image
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]) if modal.is_local() else "/source")
+from resources_servers.spreadsheet.packaging.modal_build import image  # noqa: E402
 
 
 app = modal.App("spreadsheet-gym-oracle-diagnostics")
@@ -27,7 +29,6 @@ def diagnose():
     import tempfile
     import time
     import zipfile
-    from pathlib import Path
 
     import pyarrow.parquet as pq
     from huggingface_hub import hf_hub_download
