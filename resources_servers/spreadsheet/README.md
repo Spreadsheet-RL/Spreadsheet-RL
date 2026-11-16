@@ -301,6 +301,14 @@ seccomp execution. The real service canary creates independent sessions, execute
 Python, reads recalculated values, and checks rewards 1 and 0 against a synthetic
 oracle. It is not a live policy-training run or a full dataset audit.
 
+`packaging/modal_diagnose.py` reproduces six operator-reported qualification
+failures using the cached CPU runtime and pinned public dataset. It separates
+oracle/metadata reading, LibreOffice recalculation, comparison, and cell
+inspection, and verifies that original oracle bytes stay unchanged. Its logs
+contain oracle formulas and cached values for operator diagnosis; keep them out
+of policy observations. This diagnostic does not modify a running node's source,
+qualification checkpoints, or scoring contract.
+
 ## Provenance
 
 Design references: [Spreadsheet-RL](https://github.com/Spreadsheet-RL/Spreadsheet-RL),

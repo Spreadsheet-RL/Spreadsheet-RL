@@ -6,6 +6,7 @@ from pathlib import Path
 
 import modal
 
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]) if modal.is_local() else "/source")
 from resources_servers.spreadsheet.packaging.modal_build import image  # noqa: E402
 
