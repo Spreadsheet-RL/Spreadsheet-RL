@@ -1,8 +1,10 @@
-# Dùng lại qwen_test.yaml và singlenode_main.sh
+# Dùng helper và giữ nguyên singlenode_main.sh
 
 Chạy bước chuẩn bị trên **instance train**, bằng venv đang có. Runtime LibreOffice
 tiếp tục nằm trên instance service riêng. Helper không cài package, copy cache,
-convert lại data, cấp GPU hay tự chạy train.
+convert lại data, cấp GPU hay tự chạy train. Helper sửa YAML với backup, đọc
+`singlenode_main.sh` làm mẫu và tạo riêng `singlenode_spreadsheet.sh` cạnh nó.
+Nội dung và permissions của `singlenode_main.sh` giữ nguyên.
 
 ## Những thay đổi cần thiết
 
@@ -15,7 +17,7 @@ convert lại data, cấp GPU hay tự chạy train.
 | `policy.generation.vllm_cfg.http_server_serving_chat_kwargs.tool_parser` | Đọc chat template thật; Qwen3-4B đã test dùng `hermes` |
 | `token_ids` | Đọc tokenizer thật; Qwen3-4B đã test EOS `151645`, không dùng `151643` của YAML cũ |
 | `policy.megatron_cfg.sequence_parallel` | `false` khi TP=1 |
-| Launcher | Giữ activation, copy/cache helper và NeMo-RL entrypoint; dùng driver đặt Ray log_dir vào IPC ngắn và truyền đúng exit code |
+| Launcher mới | Tái dùng activation, copy/cache helper và NeMo-RL entrypoint từ launcher gốc; dùng driver đặt Ray log_dir vào IPC ngắn và truyền đúng exit code |
 
 Không lấy batch size, số bước, giới hạn sinh, GPU memory hoặc tắt checkpoint từ
 smoke sang full train. Với file đã cung cấp, `128 × 8`, `max_num_steps=676767`,
@@ -24,7 +26,8 @@ effective config trước khi ghi. Unrelated YAML comments cũng được giữ 
 
 `smoke_driver.py` chỉ là wrapper đặt `init_ray(log_dir=...)` rồi gọi entrypoint
 cũ với YAML đã chọn; bản thân driver không áp giới hạn hai bước hay bốn task.
-Launcher tạo IPC root riêng trong `/tmp` cho mỗi lần chạy, giữ log/checkpoint cũ
+Launcher được tạo giữ nguyên thư mục `SCRIPT_DIR` của bản gốc và tạo IPC root
+riêng trong `/tmp` cho mỗi lần chạy, giữ log/checkpoint cũ
 ở vị trí đã cấu hình và bypass proxy cho các địa chỉ service/model nội bộ.
 
 ## Lệnh chuẩn bị một lần
@@ -48,27 +51,30 @@ bash "$spreadsheet_source/resources_servers/spreadsheet/packaging/prepare_existi
   --smoke-config "$spreadsheet_project/runs/smoke_train_aa4cf4d/smoke.yaml" \
   --train-data "$spreadsheet_project/data/6f274cd4cbc27e656d7ddae7c3b591669866dc84/prepared-SP06/nemo_gym/train.jsonl" \
   --private-config "$spreadsheet_project/.secrets/spreadsheet/gym.private.yaml" \
-  --expected-hostname vt-super-rl-test-ultra-selfbuilt-datapr2-0-0
+  --expected-hostname vt-super-rl-test-ultra-selfbuilt-67-tra8-0-0
 ```
 
-Thấy `EXISTING_SPREADSHEET_LAUNCHER_PREPARED` mới chạy launcher cũ:
+Thấy `EXISTING_SPREADSHEET_LAUNCHER_PREPARED` mới chạy launcher được helper tạo:
 
 ```bash
 cd /workspace/storage-shared/nlp/vai-1.4-30b/nemo-rl/rlvr_nemo_gym/v0_sizing
-bash singlenode_main.sh
+bash singlenode_spreadsheet.sh
 ```
 
-Mỗi file có backup `.before-spreadsheet-full-<id>.bak`; receipt cạnh YAML ghi
-hash trước/sau, backup paths, tokenizer, cache, số dòng và service health. Backup
-mode 0600. Nếu ghi file lỗi, helper khôi phục cả hai bản gốc. Nó từ chối patch
-launcher lần hai để tránh chồng các block IPC. Muốn rollback, dùng đúng hai backup
-trong receipt và khôi phục trước lần launch tiếp theo.
+YAML có backup `.before-spreadsheet-full-<id>.bak`, mode 0600. Receipt cạnh YAML
+ghi hash trước/sau, backup path, hash launcher gốc và launcher mới, tokenizer,
+cache, số dòng và service health. Nếu ghi lỗi, helper khôi phục YAML và gỡ launcher
+mới do chính nó tạo; launcher gốc luôn chỉ đọc. Nó từ chối ghi đè launcher mới có
+sẵn; có thể chọn tên mới qua `--output-launcher`, cùng thư mục với bản gốc để giữ
+đúng `SCRIPT_DIR`. Khi rollback, khôi phục YAML từ backup trong receipt; launcher
+gốc không cần khôi phục.
 
 ## Phạm vi đã kiểm chứng
 
 Pure migration tests và Bash syntax checks đã pass, gồm cả chính nội dung YAML/
 launcher người dùng cung cấp. Test bảo toàn lịch full train, comments, cache
-activation, exit code và backup/restore. Việc apply lên node hiện tại chưa được
+activation, exit code, backup/restore và việc không ghi vào launcher gốc.
+Việc apply lên node hiện tại chưa được
 thực hiện trong lượt này. Smoke trước chỉ kiểm chứng hai bước; cấu hình full
 `128 × 8`, 32k context và mức concurrency gốc chưa qua stress test dài.
 

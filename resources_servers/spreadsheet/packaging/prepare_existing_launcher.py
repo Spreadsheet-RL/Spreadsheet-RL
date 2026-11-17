@@ -1,7 +1,7 @@
-"""Patch the existing full-training YAML/launcher after a verified smoke setup.
+"""Prepare the full-training YAML and a derived launcher after a smoke setup.
 
 Uses the already-activated trainer environment. No installs, cache copies, data
-conversion, GPU allocation or training launch. Both files receive private backups.
+conversion, GPU allocation or training launch. The source launcher stays unchanged.
 """
 
 import argparse
@@ -160,11 +160,36 @@ def replace_atomic(path, body):
             temporary.unlink(missing_ok=True)
 
 
+def apply_updates(config, source_launcher, output_launcher, original, config_body, launcher_body):
+    """Only replace YAML and create a new launcher; never write the source launcher."""
+    if output_launcher.exists() or output_launcher.is_symlink():
+        raise FileExistsError("Generated launcher already exists; choose a fresh output path")
+    if output_launcher.resolve() in {config.resolve(), source_launcher.resolve()}:
+        raise ValueError("Generated launcher must differ from both original files")
+    for path, body in original.items():
+        if path.read_bytes() != body:
+            raise ValueError("Input changed during preflight")
+    created = False
+    try:
+        write_private(output_launcher, launcher_body, mode=0o700)
+        created = True
+        replace_atomic(config, config_body)
+    except Exception:
+        if config.read_bytes() != original[config]:
+            replace_atomic(config, original[config])
+        if created and output_launcher.read_bytes() == launcher_body:
+            output_launcher.unlink()
+        raise
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("config", "launcher", "smoke-config", "train-data", "private-config"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-hostname", required=True)
+    parser.add_argument(
+        "--output-launcher", type=Path, help="New launcher beside the original; default singlenode_spreadsheet.sh"
+    )
     args = parser.parse_args()
     if socket.gethostname() != args.expected_hostname:
         parser.error("Wrong training instance")
@@ -173,6 +198,11 @@ def main():
             parser.error("Inputs must be existing regular files")
     if args.config.resolve().parent != args.launcher.resolve().parent:
         parser.error("Use the original launcher and YAML from the same directory")
+    output_launcher = args.output_launcher or args.launcher.with_name("singlenode_spreadsheet.sh")
+    if output_launcher.resolve().parent != args.launcher.resolve().parent:
+        parser.error("Keep the generated launcher in the original directory to preserve SCRIPT_DIR")
+    if output_launcher.exists() or output_launcher.is_symlink() or output_launcher.resolve() == args.config.resolve():
+        parser.error("Choose a fresh generated launcher path, separate from the original YAML/launcher")
     if args.private_config.stat().st_mode & 0o077:
         parser.error("Private Gym config must be owner-only")
     from nemo_rl.utils.config import load_config, register_omegaconf_resolvers
@@ -261,7 +291,7 @@ def main():
             raise ValueError("Effective settings differ beyond the intended migration")
     subprocess.run(["bash", "-n"], input=launcher, text=True, check=True)
     revision = uuid4().hex[:12]
-    outputs = {args.config: text.encode(), args.launcher: launcher.encode()}
+    outputs = {args.config: text.encode(), output_launcher: launcher.encode()}
     receipt = {
         "status": "preparing",
         "training_started": False,
@@ -272,11 +302,19 @@ def main():
         "trainer_contract": contract,
         "script_sha256": digest(Path(__file__).read_bytes()),
         "driver_sha256": digest(driver.read_bytes()),
+        "source_launcher": {
+            "path": str(args.launcher.resolve()),
+            "sha256": digest(original[args.launcher]),
+            "modified": False,
+        },
+        "generated_launcher": {"path": str(output_launcher.resolve()), "sha256": digest(outputs[output_launcher])},
         "files": [],
     }
     for path, before in original.items():
         if path.read_bytes() != before:
             raise ValueError("Input changed during preflight")
+        if path == args.launcher:
+            continue
         backup = path.with_name(path.name + ".before-spreadsheet-full-" + revision + ".bak")
         write_private(backup, before)
         receipt["files"].append(
@@ -290,11 +328,10 @@ def main():
     receipt_path = args.config.with_name("spreadsheet-full-" + revision + ".json")
     write_private(receipt_path, (json.dumps(receipt, indent=2) + "\n").encode())
     try:
-        for path, body in outputs.items():
-            replace_atomic(path, body)
+        apply_updates(
+            args.config, args.launcher, output_launcher, original, outputs[args.config], outputs[output_launcher]
+        )
     except Exception as error:
-        for path, body in original.items():
-            replace_atomic(path, body)
         receipt.update(status="rolled_back", error_type=type(error).__name__)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         raise
@@ -306,6 +343,8 @@ def main():
                 "event": "EXISTING_SPREADSHEET_LAUNCHER_PREPARED",
                 "receipt": str(receipt_path),
                 "rows": count,
+                "launcher": str(output_launcher.resolve()),
+                "original_launcher_unchanged": args.launcher.read_bytes() == original[args.launcher],
                 "training_started": False,
             }
         ),

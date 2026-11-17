@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Prepare existing files using the same activation as singlenode_main.sh.
+# Prepare YAML and a separate launcher using the original runtime activation.
 set -eo pipefail
 umask 077
 if [ "$#" -lt 3 ]; then

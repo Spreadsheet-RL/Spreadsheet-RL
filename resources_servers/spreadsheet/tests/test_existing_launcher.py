@@ -5,6 +5,7 @@ from omegaconf import OmegaConf
 import pytest
 
 from resources_servers.spreadsheet.packaging.prepare_existing_launcher import (
+    apply_updates,
     edit_launcher,
     patch_yaml,
     prepare_values,
@@ -113,3 +114,38 @@ def test_atomic_replacement_and_private_backup_are_restorable(tmp_path):
     assert path.read_bytes() == b"original"
     with pytest.raises(FileExistsError):
         write_private(backup, b"overwrite")
+
+
+def test_preparation_creates_separate_launcher_without_writing_original(tmp_path):
+    config, original_launcher, generated = (
+        tmp_path / name for name in ("qwen_test.yaml", "singlenode_main.sh", "singlenode_spreadsheet.sh")
+    )
+    config.write_bytes(b"old config")
+    original_launcher.write_bytes(b"original launcher")
+    before = {path: path.read_bytes() for path in (config, original_launcher)}
+    original_mode = original_launcher.stat().st_mode
+    apply_updates(config, original_launcher, generated, before, b"spreadsheet config", b"derived launcher")
+    assert config.read_bytes() == b"spreadsheet config"
+    assert generated.read_bytes() == b"derived launcher"
+    assert original_launcher.read_bytes() == before[original_launcher]
+    assert original_launcher.stat().st_mode == original_mode
+    with pytest.raises(FileExistsError):
+        apply_updates(config, original_launcher, generated, before, b"other config", b"other launcher")
+    assert original_launcher.read_bytes() == b"original launcher"
+
+
+def test_failed_config_write_removes_only_generated_launcher_and_preserves_original(tmp_path, monkeypatch):
+    from resources_servers.spreadsheet.packaging import prepare_existing_launcher as module
+
+    config, original_launcher, generated = (
+        tmp_path / name for name in ("qwen_test.yaml", "singlenode_main.sh", "singlenode_spreadsheet.sh")
+    )
+    config.write_bytes(b"old config")
+    original_launcher.write_bytes(b"original launcher")
+    before = {path: path.read_bytes() for path in (config, original_launcher)}
+    monkeypatch.setattr(module, "replace_atomic", lambda *args: (_ for _ in ()).throw(OSError("write refused")))
+    with pytest.raises(OSError, match="write refused"):
+        apply_updates(config, original_launcher, generated, before, b"new config", b"derived launcher")
+    assert not generated.exists()
+    assert config.read_bytes() == b"old config"
+    assert original_launcher.read_bytes() == b"original launcher"
