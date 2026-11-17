@@ -4,6 +4,7 @@ Use the immutable, already-built audit runtime image. Results are private becaus
 they contain oracle formulas and cached values, never policy observations.
 """
 
+import hashlib
 import json
 import os
 import posixpath
@@ -24,7 +25,14 @@ VOLATILE = re.compile(r"(?i)(?<![A-Z0-9_.])(?:_xlfn\.)?(TODAY|NOW|RAND|RANDBETWE
 
 
 def inspect_xml(path):
-    result = {"volatile_formula_hints": [], "volatile_counts": Counter(), "invalid_cf_operators": [], "cells": []}
+    result = {
+        "volatile_formula_hints": [],
+        "volatile_counts": Counter(),
+        "invalid_cf_operators": [],
+        "invalid_filter_operators": [],
+        "operator_metadata": [],
+        "cells": [],
+    }
     with ZipFile(path) as archive:
         workbook = ET.fromstring(archive.read("xl/workbook.xml"))
         relations = ET.fromstring(archive.read("xl/_rels/workbook.xml.rels"))
@@ -57,16 +65,29 @@ def inspect_xml(path):
                             "type": cell.get("t", "n"),
                         }
                     )
+            comparisons = {"lessThanOrEqual", "equal", "lessThan", "greaterThanOrEqual", "notEqual", "greaterThan"}
+            for node in root.iter():
+                if "operator" in node.attrib:
+                    metadata = {
+                        "sheet": sheet.get("name"),
+                        "element": node.tag.rsplit("}", 1)[-1],
+                        "operator": node.get("operator"),
+                        "value": node.get("val"),
+                    }
+                    if len(result["operator_metadata"]) < 40:
+                        result["operator_metadata"].append(metadata)
+                    if metadata["element"] == "customFilter" and metadata["operator"] not in comparisons:
+                        result["invalid_filter_operators"].append(metadata)
             for formatting in root.findall("m:conditionalFormatting", NS):
                 for rule in formatting.findall("m:cfRule", NS):
                     operator = rule.get("operator")
-                    if operator is not None and operator not in {
-                        "lessThanOrEqual",
-                        "equal",
-                        "lessThan",
-                        "greaterThanOrEqual",
-                        "notEqual",
-                        "greaterThan",
+                    if operator is not None and operator not in comparisons | {
+                        "between",
+                        "notBetween",
+                        "containsText",
+                        "notContains",
+                        "beginsWith",
+                        "endsWith",
                     }:
                         result["invalid_cf_operators"].append(
                             {
@@ -110,8 +131,11 @@ def inspect_tasks(run_id, task_ids, source_commit):
                 result.append(record)
         finally:
             engine.close()
-    destination = run / "focused-dependencies.json"
-    destination.write_text(json.dumps({"tasks": result, "image_id": image.object_id, "source_commit": source_commit}, indent=2) + "\n")
+    identity = hashlib.sha256(json.dumps(task_ids).encode()).hexdigest()[:8]
+    destination = run / f"focused-dependencies-{source_commit[:12]}-{identity}.json"
+    destination.write_text(
+        json.dumps({"tasks": result, "image_id": image.object_id, "source_commit": source_commit}, indent=2) + "\n"
+    )
     volume.commit()
     return str(destination.relative_to("/artifacts"))
 
