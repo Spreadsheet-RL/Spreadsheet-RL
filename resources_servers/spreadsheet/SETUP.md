@@ -80,7 +80,7 @@ Chạy `packaging/modal_reproduce.py` bằng Modal CLI/runtime **đã có**, v�
 Không tải/build dependency lên Mac và không dùng GPU. Ví dụ từ repo:
 
 ```bash
-modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_reproduce.py \
+modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_reproduce.py::main \
   --source-commit "$(git rev-parse HEAD)" --output-dir /path/to/new/reproduction-result
 ```
 
@@ -110,3 +110,31 @@ Phân biệt ba mức:
 
 Không thay lock bằng hash mới chỉ để làm test pass. Một bundle mới cần được
 qualify, pin revision/hash mới và chạy lại phép kiểm tra trên clean containers.
+
+### Kiểm chứng bản sửa trước khi promote
+
+Lần kiểm tra ngày 2026-11-17 phát hiện bundle cũ chạy được nhưng bốn file
+glibc/loader trong Python root khác với khi dựng từ chính bộ `.deb` offline.
+Builder đã tạo root trước khi installer cập nhật thư viện. `modal_build.py`
+hiện dựng lại root sau offline install. Archive cũ và checksum cũ giữ nguyên.
+
+Chế độ `--repair` chỉ chấp nhận đúng bốn khác biệt đã chẩn đoán, thay chúng từ
+root vừa dựng và đã test, ghi provenance rồi tạo archive chuẩn hóa timestamp,
+owner và thứ tự file. Nó không bỏ qua khác biệt khi so hash. Hai clean workers
+phải cho cùng archive SHA256 và cùng fingerprints trước khi `--publish` được
+phép upload vào repository runtime đã có; credential chỉ truyền qua Modal Secret.
+Nếu upload gián đoạn, `::resume_publication --report-path REPORT --hf-python PYTHON`
+tái dùng qualification report và archive trên Volume, không chạy lại test.
+
+`runtime.candidate.lock.json` ghi artifact sửa đã publish nhưng chưa thay lock
+mặc định. Test lại archive tải từ HF, không dùng repair mode:
+
+```bash
+SPREADSHEET_RUNTIME_LOCK=runtime.candidate.lock.json \
+modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_reproduce.py::main \
+  --source-commit "$(git rev-parse HEAD)" --output-dir /path/to/new/candidate-result
+```
+
+Chỉ promote candidate sau khi cả hai clean offline installs pass, root đã phát
+hành bằng root dựng lại và đúng các fingerprint trong lock. Lock cũ được giữ
+riêng để tái hiện lỗi ban đầu.

@@ -315,6 +315,9 @@ def install(archive, lock, work, repair_commit=None):
             )
         )
         report.update(probe_result)
+        for key in ("runtime_fingerprint_sha256", "rebuilt_root_sha256", "behavior_sha256"):
+            if key in lock["expected"] and report[key] != lock["expected"][key]:
+                raise RuntimeError(f"Runtime fingerprint differs from lock: {key}")
         report["phase"] = "runtime_tests"
         env.update(SPREADSHEET_TEST_REAL_LO="1", SPREADSHEET_TEST_ROOTFS=str(work / "rebuilt-python-root"))
         run(
