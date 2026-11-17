@@ -19,11 +19,16 @@ class ServiceHTTPError(Exception):
 
 
 class Client:
-    def __init__(self, private):
-        from omegaconf import OmegaConf
+    def __init__(self, private=None, *, service_config=None):
+        if service_config is not None:
+            config = json.loads(Path(service_config).read_text())
+            self.url = f"http://127.0.0.1:{int(config['port'])}"
+            self.key = Path(config["api_key_file"]).read_text().strip()
+        else:
+            from omegaconf import OmegaConf
 
-        config = OmegaConf.load(private).spreadsheet_resources.resources_servers.spreadsheet
-        self.url, self.key = str(config.service_url).rstrip("/"), str(config.api_key)
+            config = OmegaConf.load(private).spreadsheet_resources.resources_servers.spreadsheet
+            self.url, self.key = str(config.service_url).rstrip("/"), str(config.api_key)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.operations = []
 
@@ -82,7 +87,10 @@ def cell(output):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("private-config", "dataset", "manifest", "data-root", "output-dir"):
+    credentials = parser.add_mutually_exclusive_group(required=True)
+    credentials.add_argument("--private-config", type=Path)
+    credentials.add_argument("--service-config", type=Path)
+    for name in ("dataset", "manifest", "data-root", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-hostname", required=True)
     args = parser.parse_args()
@@ -105,7 +113,7 @@ def main():
         if before != task[kind + "_sha256"]:
             raise ValueError("Original workbook differs from the qualified catalog")
         originals.append((path, before))
-    client = Client(args.private_config)
+    client = Client(args.private_config, service_config=args.service_config)
     report = {
         "actor": "trusted_service_canary",
         "status": "running",

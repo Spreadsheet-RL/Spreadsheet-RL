@@ -27,6 +27,16 @@ Nếu Bridge không cho ghi service root dưới `/opt`, phải chạy `--apply`
 trong terminal service; không bọc script để vượt scope Bridge. Frontend agent
 và config Spreadsheet có thể cập nhật riêng qua Bridge dưới đúng Gym writeRoot.
 
+Sau apply, `packaging/verify_deployed_service.py` dùng chính Python/source/rootfs
+của PID mới để chạy `test_reward_readers.py`, integration LibreOffice/Python
+thật với reward 0/1, rồi canary 12 tool qua API đang chạy. Các file test và
+`check_live_service.py` phải được stage cùng script; output mới ở
+`update-.../qa/`. Canary chạy trên node service có thể dùng `--service-config`
+thay cho YAML private, nên không cần cài OmegaConf vào runtime service.
+`SERVICE_UPDATE_VERIFIED` xác nhận runtime/API/reward canary, không khẳng định
+đã chạy model rollout hay optimizer update. Nếu QA lỗi, giữ log và chưa train;
+rollback tự động của apply chỉ bao phủ lỗi startup/readiness.
+
 ## Di chuyển dataset khi service vẫn đang chạy
 
 `/health` kiểm engine/isolation, không đọc lại workbook cho mỗi request. Catalog
