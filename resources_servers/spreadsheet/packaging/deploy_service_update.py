@@ -94,7 +94,8 @@ def graceful_stop(pid, config):
 
 
 def launch(python, source, config, log):
-    env = dict(os.environ, PYTHONPATH=str(source), PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1")
+    env = dict(os.environ, PYTHONPATH=str(source), PYTHONNOUSERSITE="1", PYTHONUNBUFFERED="1", PYTHONDONTWRITEBYTECODE="1",
+               SPREADSHEET_STARTUP_DIAGNOSTICS="1")
     env.pop("PYTHONHOME", None)
     with log.open("ab", buffering=0) as stream:
         return subprocess.Popen(
@@ -107,22 +108,67 @@ def launch(python, source, config, log):
 def ready(process, port, expected_queue=None, timeout=300):
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
     deadline, progress = time.monotonic() + timeout, 0
+    last_health, last_error = None, None
     while time.monotonic() < deadline:
         if process.poll() is not None:
             raise RuntimeError("Service exited during startup; inspect its retained log")
         try:
             with opener.open(f"http://127.0.0.1:{port}/health", timeout=3) as response:
                 health = json.load(response)
+            last_health = {k: health.get(k) for k in ("status", "engine", "python_isolation", "max_pending")}
             if health.get("status") == "ready" and health.get("python_isolation") == "chroot_uid_seccomp":
                 if expected_queue is None or health.get("max_pending") == expected_queue:
                     return health
-        except (urllib.error.URLError, TimeoutError, ConnectionError):
-            pass
+                raise ValueError("Ready API does not advertise the expected queue capacity")
+        except (urllib.error.URLError, TimeoutError, ConnectionError) as error:
+            last_error = type(error).__name__
         if time.monotonic() >= progress:
-            emit("SERVICE_UPDATE_WAITING", pid=process.pid)
+            emit("SERVICE_UPDATE_WAITING", pid=process.pid, last_health=last_health, last_error=last_error)
             progress = time.monotonic() + 15
         time.sleep(1)
     raise TimeoutError("Service readiness deadline exceeded")
+
+
+def preflight_source(python, source, config, patches):
+    """Validate imports and every workbook while the old API is still running.
+
+    This is a read-only child: it does not construct Store, probe the Python
+    sandbox, open LibreOffice, change state, or bind an API port.
+    """
+    code = r'''
+import hashlib, json, sys, time
+from pathlib import Path
+source, config, patches = map(Path, sys.argv[1:])
+sys.path.insert(0, str(source))
+started = time.monotonic()
+from resources_servers.spreadsheet.service import app, workbook, catalog
+manifest = json.loads((patches / "PATCH.json").read_text())
+for name in ("app.py", "state.py", "workbook.py"):
+    p = source / "resources_servers/spreadsheet/service" / name
+    assert hashlib.sha256(p.read_bytes()).hexdigest() == manifest["files"][name]
+assert Path(app.__file__).resolve() == (source / "resources_servers/spreadsheet/service/app.py").resolve()
+assert app.ServiceConfig.model_fields["max_pending"].default == 4000
+values = json.loads(config.read_text())
+values["max_pending"] = 4000
+cfg = app.ServiceConfig.model_validate(values)
+print(json.dumps({"event":"SERVICE_IMPORT_PREFLIGHT_OK","seconds":round(time.monotonic()-started,3)}), flush=True)
+original_hash = catalog.sha256_file
+count = [0]
+def progress(path):
+    result = original_hash(path)
+    count[0] += 1
+    if count[0] % 1000 == 0:
+        print(json.dumps({"event":"SERVICE_CATALOG_PREFLIGHT_PROGRESS","files":count[0]}), flush=True)
+    return result
+catalog.sha256_file = progress
+tasks = catalog.Catalog(cfg.manifest, cfg.data_root, cfg.allow_unqualified_tasks)
+print(json.dumps({"event":"SERVICE_CATALOG_PREFLIGHT_OK","tasks":len(tasks.tasks),
+                  "seconds":round(time.monotonic()-started,3),"reader_range_limit":workbook.MAX_ANSWER_RANGES}), flush=True)
+'''
+    env = dict(os.environ, PYTHONPATH=str(source), PYTHONNOUSERSITE="1", PYTHONDONTWRITEBYTECODE="1")
+    env.pop("PYTHONHOME", None)
+    subprocess.run([python, "-B", "-u", "-c", code, str(source), str(config), str(patches)],
+                   cwd=source, env=env, check=True, timeout=900)
 
 
 def validate_overlay(patches, source):
@@ -181,6 +227,9 @@ def main():
     shutil.copytree(source, new_source, ignore=shutil.ignore_patterns("__pycache__"))
     for name, relative in FILES.items():
         (new_source / relative).write_bytes((patches / name).read_bytes())
+    # Shared-storage cold reads must not consume the API readiness window or
+    # take down the old service before the new source/catalog has been checked.
+    preflight_source(argv[0], new_source, config, patches)
     changed = dict(original, max_pending=4000)
     new_body = (json.dumps(changed, indent=2) + "\n").encode()
     credentials = {p: digest(p) for p in (Path(original["api_key_file"]), root / "private/gym.private.yaml")}
@@ -218,6 +267,8 @@ def main():
     except Exception as error:
         record.update(status="rollback_pending", failure_type=type(error).__name__)
         save()
+        log = update / "service.log"
+        emit("SERVICE_UPDATE_STARTUP_LOG", path=str(log), bytes=log.stat().st_size if log.exists() else 0)
         if process is not None and process.poll() is None:
             graceful_stop(process.pid, config)
         atomic(config, before)

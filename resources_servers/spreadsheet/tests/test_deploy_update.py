@@ -1,9 +1,10 @@
 import json
 import sqlite3
+from types import SimpleNamespace
 
 import pytest
 
-from resources_servers.spreadsheet.packaging.deploy_service_update import FILES, atomic, digest, idle, validate_overlay
+from resources_servers.spreadsheet.packaging.deploy_service_update import FILES, atomic, digest, idle, ready, validate_overlay
 from resources_servers.spreadsheet.service.app import ServiceConfig
 
 
@@ -79,3 +80,17 @@ def test_service_queue_default_is_4000(tmp_path):
     config = ServiceConfig(manifest=tmp_path / "manifest", data_root=tmp_path, state_root=tmp_path,
                            api_key_file=tmp_path / "key")
     assert config.max_pending == 4000
+
+
+def test_ready_wrong_queue_is_diagnosed_without_waiting_for_timeout(monkeypatch):
+    from contextlib import contextmanager
+    import io
+
+    @contextmanager
+    def response(*args, **kwargs):
+        yield io.BytesIO(json.dumps({"status": "ready", "python_isolation": "chroot_uid_seccomp",
+                                    "max_pending": 256}).encode())
+
+    monkeypatch.setattr("urllib.request.build_opener", lambda *args: SimpleNamespace(open=response))
+    with pytest.raises(ValueError, match="expected queue"):
+        ready(SimpleNamespace(poll=lambda: None), 8088, expected_queue=4000)

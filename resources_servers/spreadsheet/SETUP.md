@@ -27,6 +27,15 @@ Nếu Bridge không cho ghi service root dưới `/opt`, phải chạy `--apply`
 trong terminal service; không bọc script để vượt scope Bridge. Frontend agent
 và config Spreadsheet có thể cập nhật riêng qua Bridge dưới đúng Gym writeRoot.
 
+Preflight của bản sửa startup kiểm import đúng source và hash toàn bộ seed/oracle
+trong catalog bằng Python venv hiện có **trước khi dừng API cũ**, có progress
+mỗi 1000 file. Nó không tạo Store, không ghi state, không chạy sandbox/LO
+và không bind port. Deadline readiness API vẫn 300 giây. Helper bật log từng
+pha catalog/Store/LO/Python/recovery và stack dump mỗi 60 giây nếu hàm tạo app
+bị kẹt; stack timer được hủy ngay khi tạo app xong. API ready nhưng sai queue
+bị báo lỗi ngay thay vì chờ hết timeout. Đây là cải thiện preflight/chẩn đoán,
+không tự chứng minh nguyên nhân một lần timeout startup trước đó.
+
 Sau apply, `packaging/verify_deployed_service.py` dùng chính Python/source/rootfs
 của PID mới để chạy `test_reward_readers.py`, integration LibreOffice/Python
 thật với reward 0/1, rồi canary 12 tool qua API đang chạy. Các file test và

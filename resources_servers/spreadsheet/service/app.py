@@ -86,6 +86,16 @@ class BodyLimit:
 
 
 def create_app(config: ServiceConfig, *, store=None):
+    import os
+    import time
+
+    started = time.monotonic()
+
+    def phase(name, **values):
+        if os.environ.get("SPREADSHEET_STARTUP_DIAGNOSTICS") == "1":
+            print(json.dumps({"event": name, "seconds": round(time.monotonic() - started, 3), **values}), flush=True)
+
+    phase("SERVICE_APP_BUILD_START")
     key = config.api_key_file.read_text().strip()
     if len(key) < 32:
         raise ValueError("Service key must have at least 32 characters")
@@ -97,7 +107,9 @@ def create_app(config: ServiceConfig, *, store=None):
         if any(private.resolve().is_relative_to(mount) for mount in mounts):
             raise ValueError("Private service files cannot be placed under Python runtime mounts")
     if store is None:
+        phase("SERVICE_CATALOG_START")
         catalog = Catalog(config.manifest, config.data_root, config.allow_unqualified_tasks)
+        phase("SERVICE_CATALOG_READY", tasks=len(catalog.tasks))
         engine = LibreOfficePool(
             config.state_root / "office",
             config.uno_python,
@@ -123,7 +135,9 @@ def create_app(config: ServiceConfig, *, store=None):
             )
         else:
             raise ValueError("Unknown Python isolation backend; unsafe execution is not supported")
+        phase("SERVICE_STORE_START")
         store = Store(config.state_root / "sessions", catalog, engine, runner, config.job_workers, config.max_pending)
+        phase("SERVICE_STORE_READY", max_pending=config.max_pending)
 
     async def sweep():
         while True:
@@ -140,9 +154,13 @@ def create_app(config: ServiceConfig, *, store=None):
         cleanup_task = None
         try:
             fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            phase("SERVICE_OFFICE_PROBE_START")
             await asyncio.to_thread(store.engine.probe)
+            phase("SERVICE_OFFICE_PROBE_READY")
             await asyncio.to_thread(store.python_runner.probe)
+            phase("SERVICE_PYTHON_PROBE_READY")
             await asyncio.to_thread(store.recover)
+            phase("SERVICE_RECOVERY_READY")
             cleanup_task = asyncio.create_task(sweep())
             yield
         finally:
@@ -217,13 +235,24 @@ def create_app(config: ServiceConfig, *, store=None):
 
 
 def main():
+    import faulthandler
+    import os
+
     import uvicorn
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, required=True)
     args = parser.parse_args()
     config = ServiceConfig.model_validate(json.loads(args.config.read_text()))
-    uvicorn.run(create_app(config), host=config.host, port=config.port, workers=1, access_log=False)
+    diagnose = os.environ.get("SPREADSHEET_STARTUP_DIAGNOSTICS") == "1"
+    if diagnose:
+        faulthandler.dump_traceback_later(60, repeat=True)
+    try:
+        application = create_app(config)
+    finally:
+        if diagnose:
+            faulthandler.cancel_dump_traceback_later()
+    uvicorn.run(application, host=config.host, port=config.port, workers=1, access_log=False)
 
 
 if __name__ == "__main__":
