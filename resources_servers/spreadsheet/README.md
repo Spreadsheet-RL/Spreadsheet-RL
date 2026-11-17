@@ -41,9 +41,11 @@ calculation defects. The gate checks existing oracle values, not arbitrary futur
 policy formulas. A later NeMo Gym smoke completed two training steps and eight
 model rollouts with twelve tool calls and both reward classes; see [SETUP.md](SETUP.md).
 Full-scale training throughput and Excel reward equivalence remain unverified.
-The current integration suite on 2026-11-17 passed 101 tests with four expected
+The current integration suite on 2026-11-17 passed 104 tests with seven expected
 skips using the existing development runtime. Linux/LibreOffice checks above ran
 on Modal CPU; no service dependencies were installed on the Mac.
+The [full dataset audit](DATASET_AUDIT.md) records strict recoveries, remaining
+reader/engine errors and measured compatibility-selection coverage.
 
 Run these commands **on the service node**, using its configured company proxy:
 download and extract the runtime on node-local executable storage. Dataset files

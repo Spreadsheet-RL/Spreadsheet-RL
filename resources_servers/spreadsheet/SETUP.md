@@ -5,6 +5,10 @@ Code tích hợp nằm trên branch `tungks/feat/tool/spreadsheet-rl` của
 Lịch sử nhập từ Gym được ghi trong [IMPORTS.json](IMPORTS.json). Các hash thay đổi
 khi áp dụng commit lên lịch sử upstream khác; manifest giữ cả hai hash.
 
+Kết quả audit toàn bộ dataset, task phục hồi và giới hạn về selection bias nằm
+trong [DATASET_AUDIT.md](DATASET_AUDIT.md). Các export phục hồi chưa thay dữ liệu
+hoặc service đang chạy trên node công ty.
+
 ## Hai instance và phần cần cài
 
 | Instance | Thành phần | Điều kiện |

@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-17",
+  "audit_source_commit": "f86fbf2c98db97d9cdf19a3c81d148ea02b89cc6",
+  "coverage_source_commit": "cb0573e11b4139a1369e0e1e1ad1a53df2e9041a",
+  "modal_app_id": "ap-mxb6iWFhAmfiEDCgpPuuFT",
+  "modal_runtime_image_id": "im-JGogyV0mKIliYc8Lw9CtOw",
+  "workers": 8,
+  "dataset_revision": "6f274cd4cbc27e656d7ddae7c3b591669866dc84",
+  "runtime_artifact": {
+    "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+    "revision": "36f3a2cdd2506ca61979d90998d7df41d5845014",
+    "filename": "spreadsheet-gym-ubuntu24.04-x86_64-repro1.tar.gz",
+    "sha256": "151ae1135a44aa8d8f993a9bfc22306bbb0e9c0283c7c6e31de8405f94fb15d4",
+    "bytes": 288223870,
+    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d",
+    "repair_source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576"
+  },
+  "checked": 8647,
+  "baseline_qualified": 7685,
+  "baseline_rejected": 962,
+  "historical_operator_qualified": 7684,
+  "historical_membership_verified": false,
+  "baseline_reasons": {
+    "oracle_value_mismatch": 829,
+    "recalculation_or_comparison_failed": 133
+  },
+  "verdicts": {
+    "baseline_retained": 7685,
+    "text_mismatch": 63,
+    "numeric_value_mismatch": 162,
+    "numeric_precision_candidate": 47,
+    "missing_cached_value": 86,
+    "unstable_or_unconfirmed_recalculation": 30,
+    "value_mismatch": 281,
+    "mixed_value_mismatch": 81,
+    "formula_error": 74,
+    "missing_sheet": 9,
+    "unresolved_error": 104,
+    "recovered_scoring_only": 21,
+    "recovered_strict": 4
+  },
+  "strict_regressions": 0,
+  "recovered_by_split": {
+    "train": 4
+  },
+  "coverage": {
+    "split": {
+      "test": {
+        "total": 2722,
+        "baseline_kept": 2402,
+        "strict_recovered": 0,
+        "still_withheld": 320,
+        "baseline_keep_rate": 0.8824393828067597,
+        "keep_rate_after_strict_recovery": 0.8824393828067597
+      },
+      "train": {
+        "total": 5925,
+        "baseline_kept": 5283,
+        "strict_recovered": 4,
+        "still_withheld": 638,
+        "baseline_keep_rate": 0.8916455696202532,
+        "keep_rate_after_strict_recovery": 0.8923206751054852
+      }
+    },
+    "source": {
+      "excelforum/excel-formulas-and-functions": {
+        "total": 5096,
+        "baseline_kept": 4546,
+        "strict_recovered": 4,
+        "still_withheld": 546,
+        "baseline_keep_rate": 0.8920722135007849,
+        "keep_rate_after_strict_recovery": 0.8928571428571429
+      },
+      "excelforum/excel-general": {
+        "total": 829,
+        "baseline_kept": 737,
+        "strict_recovered": 0,
+        "still_withheld": 92,
+        "baseline_keep_rate": 0.8890229191797346,
+        "keep_rate_after_strict_recovery": 0.8890229191797346
+      },
+      "spreadsheetbench/spreadsheet": {
+        "total": 2722,
+        "baseline_kept": 2402,
+        "strict_recovered": 0,
+        "still_withheld": 320,
+        "baseline_keep_rate": 0.8824393828067597,
+        "keep_rate_after_strict_recovery": 0.8824393828067597
+      }
+    },
+    "answer_ranges": {
+      "1": {
+        "total": 8054,
+        "baseline_kept": 7229,
+        "strict_recovered": 0,
+        "still_withheld": 825,
+        "baseline_keep_rate": 0.8975664266203129,
+        "keep_rate_after_strict_recovery": 0.8975664266203129
+      },
+      "2-5": {
+        "total": 562,
+        "baseline_kept": 432,
+        "strict_recovered": 0,
+        "still_withheld": 130,
+        "baseline_keep_rate": 0.7686832740213523,
+        "keep_rate_after_strict_recovery": 0.7686832740213523
+      },
+      "21+": {
+        "total": 5,
+        "baseline_kept": 0,
+        "strict_recovered": 4,
+        "still_withheld": 1,
+        "baseline_keep_rate": 0.0,
+        "keep_rate_after_strict_recovery": 0.8
+      },
+      "6-20": {
+        "total": 26,
+        "baseline_kept": 24,
+        "strict_recovered": 0,
+        "still_withheld": 2,
+        "baseline_keep_rate": 0.9230769230769231,
+        "keep_rate_after_strict_recovery": 0.9230769230769231
+      }
+    }
+  },
+  "unresolved_first_attempt_errors": {
+    "finite_A1_parser": 69,
+    "worksheet_resolution": 22,
+    "per_range_cell_limit": 10,
+    "libreoffice_timeout": 3
+  },
+  "tests": {
+    "linux_focused_passed": 15,
+    "linux_focused_skipped": 1,
+    "local_integration_passed": 104,
+    "local_integration_skipped": 7,
+    "changed_file_ruff": "passed"
+  },
+  "policy": {
+    "cell_value_equality": "unchanged",
+    "oracle_replacement": false,
+    "numeric_precision_candidates_accepted": false,
+    "active_training_data_modified": false,
+    "company_service_modified": false
+  },
+  "limitations": [
+    "Matching total counts would not prove identical historical ID membership; this baseline has one more pass than the historical node log.",
+    "Two oracle recalculations do not establish equivalence for all future policy formulas or all dates/random states.",
+    "Coverage is descriptive; zero regressions does not establish absence of selection bias.",
+    "Detailed oracle diagnostics remain private and are excluded from policy data."
+  ],
+  "private_evidence_sha256": {
+    "summary.json": "651ad43cc9af907f7ad2f02cbeda096df9638813c1179dee4124642ae7514ace",
+    "rejected.audit.jsonl": "f05beadd44380da547167dad2548fc8ef2bfed962486a4537bc6865fb758f5af",
+    "recovered.manifest.jsonl": "05696a6d621c40d861809d7ca6b8ab609438ae1e7deb9c79d7c9b1f7e8194858",
+    "selection-coverage.json": "3eb4da97fc571185b701dd20f9afe9068a04913ab0a0017bb7c22cd5da271547",
+    "focused-dependencies.json": "837efe1828b156692c424911fa5dfc8c8015514e8e5a3826cd42573463d1b571",
+    "focused-filters.json": "8ed4c0e545247ec9ba8f8b2f08689b5c35e28f33d002fa4f1a3b905025753441"
+  }
+}
