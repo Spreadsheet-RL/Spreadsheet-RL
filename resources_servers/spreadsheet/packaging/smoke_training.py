@@ -59,7 +59,7 @@ def model_metadata(model):
     }
 
 
-def smoke_overrides(base, root, subset, metadata):
+def smoke_overrides(base, root, subset, metadata, six_gpu=False):
     from omegaconf import OmegaConf
 
     gym = OmegaConf.to_container(base.env.nemo_gym, resolve=False)
@@ -76,7 +76,7 @@ def smoke_overrides(base, root, subset, metadata):
     if "policy_model_reasoning_off" in gym:
         gym["policy_model_reasoning_off"]["responses_api_models"]["vllm_model"]["num_workers"] = 1
     gym["spreadsheet_agent"] = {"responses_api_agents": {"spreadsheet_agent": {"max_steps": 6}}}
-    return {
+    overrides = {
         "checkpointing": {"enabled": False, "checkpoint_dir": str(root / "ckpt")},
         "grpo": {
             "num_prompts_per_step": 2,
@@ -115,6 +115,33 @@ def smoke_overrides(base, root, subset, metadata):
         },
         "token_ids": {key: metadata[key] for key in ("eos", "think_open", "think_close") if metadata[key] is not None},
     }
+    if six_gpu:
+        overrides["cluster"] = {"num_nodes": 1, "gpus_per_node": 6}
+        overrides["data"]["max_input_seq_length"] = 4096
+        policy = overrides["policy"]
+        policy.update(
+            precision="bfloat16",
+            train_global_batch_size=4,
+            train_micro_batch_size=1,
+            logprob_batch_size=1,
+            logprob_chunk_size=4,
+            max_total_sequence_length=8192,
+        )
+        policy["megatron_cfg"].update(
+            tensor_model_parallel_size=4,
+            pipeline_model_parallel_size=1,
+            context_parallel_size=1,
+            sequence_parallel=True,
+            activation_checkpointing=True,
+        )
+        policy["megatron_cfg"]["optimizer"] = {"optimizer_cpu_offload": False, "optimizer_offload_fraction": 0.0}
+        generation = policy["generation"]
+        generation["colocated"] = {"enabled": False, "resources": {"gpus_per_node": 2, "num_nodes": 1}}
+        generation["vllm_cfg"].update(
+            tensor_parallel_size=2, pipeline_parallel_size=1, expert_parallel_size=1, max_model_len=8192
+        )
+        generation["vllm_kwargs"]["max_num_batched_tokens"] = 16384
+    return overrides
 
 
 def clean_environment(root, ray_root, gym_root):
@@ -231,12 +258,26 @@ def redact_artifacts(roots, secrets):
     return changed
 
 
+def existing_actor_root(trainer_root):
+    selected = os.environ.get("NEMO_RL_VENV_DIR")
+    candidates = [Path(selected)] if selected else [trainer_root / "venvs", Path("/opt/ray_venvs")]
+    for candidate in candidates:
+        if all((candidate / actor / "bin/python").is_file() for actor in ACTORS):
+            return candidate.resolve()
+    raise ValueError(
+        "Missing prebuilt actor venvs; refusing to bootstrap. Checked: " + ", ".join(map(str, candidates))
+    )
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("trainer-root", "base-config", "run-dir", "ipc-root", "private-config"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-hostname", required=True)
     parser.add_argument("--max-wall-seconds", type=int, default=1800)
+    parser.add_argument("--gpu-indices", help="Qwen3-32B six-GPU smoke profile, e.g. 0,1,2,3,4,5")
+    parser.add_argument("--helpers-root", type=Path, default=Path(__file__).resolve().parent)
+    parser.add_argument("--reuse-cache-root", type=Path, help="Existing launcher directory containing cache/")
     args = parser.parse_args()
     if socket.gethostname() != args.expected_hostname:
         parser.error("Wrong training instance")
@@ -251,10 +292,41 @@ def main():
 
     register_omegaconf_resolvers()
     base = load_config(args.base_config)
+    if args.gpu_indices and Path(load_config.__code__.co_filename).resolve().parents[2] != args.trainer_root.resolve():
+        raise ValueError("Activation selected a different trainer checkout")
     metadata = model_metadata(Path(base.policy.model_name))
-    if int(base.cluster.num_nodes) != 1 or int(base.cluster.gpus_per_node) != 2:
-        raise ValueError("This smoke is authorized for the existing single-node two-GPU layout")
-    actor_root = Path(os.environ.get("NEMO_RL_VENV_DIR", "/opt/ray_venvs"))
+    six_gpu = args.gpu_indices is not None
+    scope = None
+    if six_gpu:
+        sys.path.insert(0, str(args.helpers_root))
+        from gpu_scope import inspect_selected, parse_indices
+
+        indices = parse_indices(args.gpu_indices)
+        if indices != list(range(6)) or int(base.cluster.num_nodes) != 1 or int(base.cluster.gpus_per_node) != 6:
+            raise ValueError("Require the assigned single-node GPU 0-5 layout")
+        if Path(base.policy.model_name).name != "Qwen3-32B" or metadata["model_type"] != "qwen3":
+            raise ValueError("This six-GPU profile requires the selected dense Qwen3-32B model")
+        if not OmegaConf.select(base, "policy.megatron_cfg.enabled") or base.policy.generation.backend != "vllm":
+            raise ValueError("The six-GPU profile requires the existing Megatron trainer and vLLM backend")
+        if (
+            base.get("on_policy_distillation", {}).get("enabled", False)
+            or base.grpo.get("adv_estimator", {}).get("name") == "opd"
+        ):
+            raise ValueError("This is an RLVR smoke, not an OPD run")
+        scope = inspect_selected(indices, args.expected_hostname)
+        capacity = subprocess.check_output(
+            ["nvidia-smi", "-i", args.gpu_indices, "--query-gpu=memory.total", "--format=csv,noheader,nounits"],
+            text=True,
+        )
+        if len(capacity.splitlines()) != 6 or any(int(line.strip()) < 160000 for line in capacity.splitlines()):
+            raise ValueError("The six-GPU profile requires the assigned large-memory GPUs")
+    elif int(base.cluster.num_nodes) != 1 or int(base.cluster.gpus_per_node) != 2:
+        raise ValueError("Legacy smoke requires two GPUs; select --gpu-indices for the six-GPU profile")
+    actor_root = (
+        existing_actor_root(args.trainer_root)
+        if six_gpu
+        else Path(os.environ.get("NEMO_RL_VENV_DIR", "/opt/ray_venvs"))
+    )
     for actor in ACTORS:
         if not (actor_root / actor / "bin/python").is_file():
             raise ValueError(f"Missing prebuilt actor venv; refusing to bootstrap: {actor}")
@@ -265,10 +337,31 @@ def main():
         raise ValueError("Smoke rows must route to spreadsheet_agent")
     subset = root / "train.jsonl"
     subset.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows))
-    overrides = smoke_overrides(base, root, subset, metadata)
+    overrides = smoke_overrides(base, root, subset, metadata, six_gpu=six_gpu)
     from nemo_gym import PARENT_DIR as gym_source
 
-    audit_agent = Path(__file__).with_name("audit_agent.py")
+    if six_gpu:
+        if Path(gym_source).resolve() != (args.trainer_root / "3rdparty/Gym-workspace/Gym").resolve():
+            raise ValueError("Activation selected a different Gym checkout")
+        from prepare_training_node import probe_venv, service_probe
+        import importlib.metadata as package_metadata
+
+        expected_versions = {name: package_metadata.version(name) for name in ("ray", "openai")}
+        cache = Path(base.env.nemo_gym.uv_venv_dir)
+        for relative, module in (
+            ("responses_api_models/vllm_model", None),
+            ("resources_servers/spreadsheet", "resources_servers.spreadsheet.app"),
+            ("responses_api_agents/spreadsheet_agent", "responses_api_agents.spreadsheet_agent.app"),
+        ):
+            result = probe_venv(cache / relative / ".venv", Path(gym_source), module)
+            if (
+                Path(result["prefix"]).resolve() != Path(result["venv_path"]).resolve()
+                or result["versions"] != expected_versions
+            ):
+                raise ValueError("Existing cache interpreter/version mismatch")
+        service_probe(args.private_config, "LibreOffice 24.2.7.2 420(Build:2)")
+
+    audit_agent = args.helpers_root / "audit_agent.py"
     agent = overrides["env"]["nemo_gym"]["spreadsheet_agent"]["responses_api_agents"]["spreadsheet_agent"]
     agent.update(
         entrypoint=os.path.relpath(audit_agent, gym_source / "responses_api_agents/spreadsheet_agent"),
@@ -281,16 +374,50 @@ def main():
     resolved = OmegaConf.to_container(load_config(config), resolve=True)
     assert resolved["grpo"]["max_num_steps"] == 2
     assert resolved["policy"]["train_global_batch_size"] == 4
-    env = clean_environment(root, ray_root, Path(base.env.nemo_gym.uv_venv_dir))
-    before = gpu_snapshot()
-    if len(before) != 2 or any(int(gpu["memory_mb"]) > 1024 for gpu in before):
+    if six_gpu:
+        assert resolved["policy"]["megatron_cfg"]["tensor_model_parallel_size"] == 4
+        assert resolved["policy"]["generation"]["vllm_cfg"]["tensor_parallel_size"] == 2
+        # Freeze the effective smoke config, avoiding a later reread of the
+        # user's YAML/defaults while this run is in flight.
+        config.write_text(OmegaConf.to_yaml(OmegaConf.create(resolved), resolve=True))
+        print(
+            json.dumps(
+                {
+                    "event": "SIX_GPU_CONFIG_CHECKED",
+                    "model": resolved["policy"]["model_name"],
+                    "train_gpus": 4,
+                    "train_tp": 4,
+                    "train_dp": 1,
+                    "rollout_gpus": 2,
+                    "rollout_tp": 2,
+                    "context": 8192,
+                    "precision": "bfloat16",
+                    "optimizer_cpu_offload": False,
+                    "max_new_tokens": 4096,
+                    "optimizer_steps": 2,
+                    "prompts_per_step": 2,
+                    "rollouts_per_prompt": 2,
+                    "config": str(config),
+                }
+            ),
+            flush=True,
+        )
+    env = clean_environment(
+        args.reuse_cache_root.resolve() if args.reuse_cache_root else root,
+        ray_root,
+        Path(base.env.nemo_gym.uv_venv_dir),
+    )
+    before = scope["devices"] if scope else gpu_snapshot()
+    if not six_gpu and (len(before) != 2 or any(int(gpu["memory_mb"]) > 1024 for gpu in before)):
         raise ValueError("The two allocated GPUs are no longer idle")
-    env["CUDA_VISIBLE_DEVICES"] = ",".join(gpu["index"] for gpu in before)
+    env["CUDA_VISIBLE_DEVICES"] = ",".join(scope["uuids"] if scope else [gpu["index"] for gpu in before])
     env["NEMO_RL_VENV_DIR"] = str(actor_root)
     private = OmegaConf.load(args.private_config).spreadsheet_resources.resources_servers.spreadsheet
     secrets = [str(private.api_key), str(private.session_secret_key)]
     entry = args.trainer_root / "examples/nemo_gym/run_grpo_nemo_gym.py"
-    driver = Path(__file__).with_name("smoke_driver.py")
+    driver = args.helpers_root / "smoke_driver.py"
+    if not driver.is_file() or not audit_agent.is_file():
+        raise ValueError("Pinned driver/audit helper is missing")
     report = {
         "status": "running",
         "hostname": socket.gethostname(),
@@ -306,6 +433,8 @@ def main():
         "driver_sha256": sha(driver),
         "audit_agent_sha256": sha(audit_agent),
         "gpus_before": before,
+        "actor_venv_root": str(actor_root),
+        "gpu_profile": "train_tp4_rollout_tp2" if six_gpu else "legacy_two_gpu",
         "requested_optimizer_steps": 2,
         "max_wall_seconds": args.max_wall_seconds,
         "log": str(root / "train.log"),
@@ -326,18 +455,30 @@ def main():
         flush=True,
     )
     start = time.monotonic()
+    command = [
+        sys.executable,
+        "-B",
+        str(driver),
+        "--entrypoint",
+        str(entry),
+        "--config",
+        str(config),
+        "--ray-root",
+        str(ray_root),
+    ]
+    if scope:
+        command.extend(
+            [
+                "--gpu-indices",
+                args.gpu_indices,
+                "--gpu-uuids",
+                ",".join(scope["uuids"]),
+                "--expected-hostname",
+                args.expected_hostname,
+            ]
+        )
     process = subprocess.Popen(
-        [
-            sys.executable,
-            "-B",
-            str(driver),
-            "--entrypoint",
-            str(entry),
-            "--config",
-            str(config),
-            "--ray-root",
-            str(ray_root),
-        ],
+        command,
         cwd=root,
         env=env,
         stdout=subprocess.PIPE,
@@ -376,6 +517,7 @@ def main():
         elapsed_seconds=time.monotonic() - start,
         gpus_after=gpu_snapshot(),
         redacted_artifacts=redact_artifacts((root, ipc_root), secrets),
+        base_config_unchanged=sha(args.base_config) == report["base_config_sha256"],
     )
     (root / "run.json").write_text(json.dumps(report, indent=2) + "\n")
     print(
@@ -389,6 +531,36 @@ def main():
         ),
         flush=True,
     )
+    if six_gpu:
+        if timed_out.is_set() and code == 0:
+            code = 124
+        if not report["base_config_unchanged"] and code == 0:
+            code = 1
+        try:
+            sys.path.insert(0, str(args.helpers_root))
+            from analyze_training_smoke import analyze
+
+            analysis = analyze(root)
+            (root / "analysis.json").write_text(json.dumps(analysis, indent=2) + "\n")
+            summary = {
+                key: analysis[key]
+                for key in (
+                    "logged_steps",
+                    "trajectory_count",
+                    "model_tool_calls",
+                    "reward_counts",
+                    "advantages",
+                    "environment_error_count",
+                    "problems",
+                )
+            }
+            print(json.dumps({"event": "SIX_GPU_SMOKE_ANALYSIS", **summary}), flush=True)
+            if code == 0 and analysis["problems"]:
+                code = 1
+        except Exception as error:
+            print(json.dumps({"event": "SIX_GPU_ANALYSIS_FAILED", "error_type": type(error).__name__}), flush=True)
+            if code == 0:
+                code = 1
     raise SystemExit(code if code >= 0 else 128 - code)
 
 

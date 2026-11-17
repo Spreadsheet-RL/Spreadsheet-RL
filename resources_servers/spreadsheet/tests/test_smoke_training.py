@@ -4,7 +4,9 @@ from pathlib import Path
 from omegaconf import OmegaConf
 
 from resources_servers.spreadsheet.packaging.smoke_training import (
+    ACTORS,
     clean_environment,
+    existing_actor_root,
     model_metadata,
     redact,
     smoke_overrides,
@@ -77,3 +79,59 @@ def test_long_run_paths_use_short_vllm_and_ray_ipc_directories(monkeypatch):
     assert len(str(ipc / "tmp" / ("x" * 36)).encode()) <= 107
     assert len(str(ipc / "session_9999-99-99_99-99-99_999999_9999999/sockets/dash_MetricsHead").encode()) <= 107
     assert env["HF_HUB_OFFLINE"] == "1"
+
+
+def test_six_gpu_profile_has_four_train_tp_ranks_and_two_rollout_tp_ranks(tmp_path):
+    base = OmegaConf.create(
+        {
+            "env": {
+                "nemo_gym": {
+                    "policy_model": {"responses_api_models": {"vllm_model": {"num_workers": 16}}},
+                }
+            },
+            "policy": {"model_name": "/models/Qwen3-32B", "max_total_sequence_length": 32768},
+            "grpo": {"num_prompts_per_step": 256, "num_generations_per_prompt": 4},
+        }
+    )
+    before = OmegaConf.to_container(base, resolve=False)
+    overrides = smoke_overrides(
+        base,
+        tmp_path,
+        tmp_path / "train.jsonl",
+        {
+            "tool_parser": "hermes",
+            "eos": 151645,
+            "think_open": 151667,
+            "think_close": 151668,
+        },
+        six_gpu=True,
+    )
+    effective = OmegaConf.merge(base, overrides)
+    assert effective.cluster.gpus_per_node == 6
+    assert effective.policy.megatron_cfg.tensor_model_parallel_size == 4
+    assert effective.policy.megatron_cfg.sequence_parallel is True
+    assert effective.policy.megatron_cfg.activation_checkpointing is True
+    assert effective.policy.precision == "bfloat16"
+    assert effective.policy.megatron_cfg.optimizer.optimizer_cpu_offload is False
+    assert effective.policy.generation.vllm_cfg.tensor_parallel_size == 2
+    assert effective.policy.generation.colocated.resources.gpus_per_node == 2
+    assert effective.policy.train_global_batch_size == 4
+    assert effective.grpo.max_num_steps == 2
+    assert effective.policy.max_total_sequence_length == 8192
+    assert effective.policy.model_name == "/models/Qwen3-32B"
+    assert OmegaConf.to_container(base, resolve=False) == before
+
+
+def test_existing_actor_root_reuses_complete_default_and_respects_explicit_root(tmp_path, monkeypatch):
+    import pytest
+
+    monkeypatch.delenv("NEMO_RL_VENV_DIR", raising=False)
+    root = tmp_path / "venvs"
+    for actor in ACTORS:
+        executable = root / actor / "bin/python"
+        executable.parent.mkdir(parents=True)
+        executable.touch()
+    assert existing_actor_root(tmp_path) == root
+    monkeypatch.setenv("NEMO_RL_VENV_DIR", str(tmp_path / "missing"))
+    with pytest.raises(ValueError, match="refusing to bootstrap"):
+        existing_actor_root(tmp_path)

@@ -113,6 +113,22 @@ sẵn; có thể chọn tên mới qua `--output-launcher`, cùng thư mục v�
 đúng `SCRIPT_DIR`. Khi rollback, khôi phục YAML từ backup trong receipt; launcher
 gốc không cần khôi phục.
 
+## Smoke riêng cho Qwen3-32B trên 6 GPU
+
+`packaging/smoke_training.py --gpu-indices 0,1,2,3,4,5` chọn profile Qwen3-32B:
+4 GPU train TP=4/DP=1 và 2 GPU rollout TP=2, BF16, optimizer trên GPU, sequence
+parallel cùng activation checkpointing bật. Config smoke riêng được đóng băng sau khi resolve; context
+8k, tối đa 4096 token sinh, 2 prompt × 2 rollout, 2 step, checkpoint tắt. YAML
+train chính không bị sửa. `--helpers-root` cho phép dùng driver/audit/cache probes
+đã khóa revision; `--reuse-cache-root` tái dùng cache dưới thư mục launcher cũ.
+Script yêu cầu actor venv có sẵn, kiểm tra cache/service và GPU idle, pin UUID
+qua driver cùng Ray resource guard; không cài package hay dừng Ray cluster khác.
+Receipt, train log, model trajectories và analysis được ghi trong run dir riêng.
+Wall timeout chỉ gửi SIGTERM tới nhóm process driver của lần chạy; nếu tiến trình
+Ray còn tồn tại sau lỗi thì phải kiểm tra ownership trước khi dọn, không kill rộng.
+Đây là kiểm tra runtime/tools/reward propagation; hai step không chứng minh
+chất lượng model cải thiện hoặc đủ VRAM cho cấu hình full 32k/batch 256×4.
+
 ## Phạm vi đã kiểm chứng
 
 Pure migration tests và Bash syntax checks đã pass, gồm cả chính nội dung YAML/
