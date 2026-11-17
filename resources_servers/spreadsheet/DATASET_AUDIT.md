@@ -121,3 +121,12 @@ counterpart. Worksheet cells and formulas remain byte-for-byte as exported;
 other ZIP parts remain unchanged. Valid exports and malformed input metadata are
 left untouched. Pivot caches and unsupported chart structures are not guessed.
 The value comparator and rounding rules are unchanged.
+
+If only the audit seed fingerprint changes after a full run, use
+`packaging/modal_recheck_seed_gates.py::main` with `--source-commit`,
+`--full-audit-commit`, `--source-run`, and `--output-dir`. It requires a clean
+commit, refuses any change to the service/schema trees, and requires a completed
+full audit with no baseline regressions. It rechecks every strictly scored
+candidate seed on up to eight CPU workers and writes a new private report while
+preserving the full-run evidence. Array/data-table formulas are fingerprinted by
+content and attributes; Python object addresses are never part of cell identity.

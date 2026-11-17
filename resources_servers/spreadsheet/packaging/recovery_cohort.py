@@ -90,6 +90,7 @@ def prepare_cohort(tasks_path, previous):
 def content_digest(path):
     """Hash logical cells/formulas/types without copying the full workbook into RAM."""
     from resources_servers.spreadsheet.service.workbook import load
+    from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
     book = load(path, read_only=True)
     digest = hashlib.sha256()
@@ -104,14 +105,22 @@ def content_digest(path):
                     if count > 8_000_000:
                         raise ValueError("Seed content scan budget exceeded")
                     if cell.value is not None:
+                        value = cell.value
+                        if cell.data_type == "f" and not isinstance(value, str):
+                            if not isinstance(value, (ArrayFormula, DataTableFormula)):
+                                raise ValueError(
+                                    "Unsupported formula representation in seed audit"
+                                )
+                            # Object repr contains a memory address, not formula identity.
+                            value = {
+                                "kind": type(value).__name__,
+                                "attributes": vars(value),
+                            }
+                        else:
+                            value = [type(value).__name__, str(value)]
                         digest.update(
                             json.dumps(
-                                [
-                                    cell.coordinate,
-                                    cell.data_type,
-                                    type(cell.value).__name__,
-                                    str(cell.value),
-                                ]
+                                [cell.coordinate, cell.data_type, value], sort_keys=True
                             ).encode()
                         )
         return digest.hexdigest()
@@ -226,8 +235,9 @@ def negative_control(oracle, actual, address, output):
     return {"passed": score["reward"] == 0, "reward": score["reward"]}
 
 
-def summarize_cohort(run):
-    records, hashes = read_records(run)
+def summarize_cohort(run, records=None, hashes=None):
+    if records is None:
+        records, hashes = read_records(run)
     identity = json.loads((run / "identity.json").read_text())
     tasks = [
         json.loads(line) for line in (run / "tasks.jsonl").read_text().splitlines()

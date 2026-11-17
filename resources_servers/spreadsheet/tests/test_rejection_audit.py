@@ -109,3 +109,25 @@ def test_negative_control_rejects_changed_answer_and_seed_roundtrip_preserves_ce
     assert result == {'passed': True, 'reward': 0}
     assert seed_roundtrip(actual, SimpleNamespace(recalculate=lambda path: None))['passed']
     assert oracle.read_bytes() == before
+
+
+def test_seed_digest_uses_array_formula_content_not_object_address(tmp_path):
+    openpyxl = pytest.importorskip('openpyxl')
+    from openpyxl.worksheet.formula import ArrayFormula
+    from resources_servers.spreadsheet.packaging.recovery_cohort import content_digest, seed_roundtrip
+
+    path = tmp_path / 'array.xlsx'
+    book = openpyxl.Workbook()
+    book.active['A1'], book.active['A2'] = 1, 2
+    book.active['B1'] = ArrayFormula(ref='B1:B2', text='=A1:A2*2')
+    book.save(path)
+    book.close()
+    original = content_digest(path)
+    assert content_digest(path) == original
+    assert seed_roundtrip(path, SimpleNamespace(recalculate=lambda path: None))['passed']
+    assert content_digest(path) == original
+    book = openpyxl.load_workbook(path)
+    book.active['B1'] = ArrayFormula(ref='B1:B2', text='=A1:A2*3')
+    book.save(path)
+    book.close()
+    assert content_digest(path) != original
