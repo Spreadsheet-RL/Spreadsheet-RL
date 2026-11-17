@@ -103,3 +103,23 @@ def test_streaming_answer_budget_and_negative_controls(tmp_path):
     assert compare(oracle, actual, "Result!B:A")["reward"] == 0
     assert oracle.read_bytes() == before
     book.close()
+
+
+def test_previously_valid_sheet_literals_keep_significant_trailing_spaces(tmp_path):
+    openpyxl = pytest.importorskip('openpyxl')
+    from resources_servers.spreadsheet.service.workbook import compare
+
+    wb = openpyxl.Workbook()
+    wb.active.title = 'Tamper '
+    wb.active['A1'] = 7
+    wb.create_sheet('Tamper')['A1'] = 'different sheet'
+    path = tmp_path / 'original.xlsx'
+    wb.save(path)
+    wb.close()
+    assert compare(path, path, "Tamper '!A1")['reward'] == 1
+    from resources_servers.spreadsheet.service.workbook import answer_regions, load
+    wb = load(path, values=True, read_only=True)
+    try:
+        assert answer_regions(wb, "Tamper '!A1")[0][0].title == 'Tamper '
+    finally:
+        wb.close()

@@ -433,15 +433,25 @@ def answer_regions(workbook, answer_position):
         parse_answer_position,
     )
 
-    parsed = parse_answer_position(answer_position, default_sheet_name=workbook.sheetnames[0])
-    if len(parsed) > MAX_ANSWER_RANGES:
-        raise ToolError(f"At most {MAX_ANSWER_RANGES} answer ranges")
-    for name, address in parsed:
-        name = _resolve_sheet_name(workbook, name)
-        if name is None:
-            raise ToolError("Worksheet does not exist")
-        worksheet = workbook[name]
-        bounds = _cell_range_boundaries(address, max_row_hint=max(1, int(worksheet.max_row or 1)))
+    # Preserve exact legacy sheet literals, including significant trailing spaces.
+    # Fall back as a whole only when the bounded legacy resolver cannot interpret
+    # the metadata. Never reinterpret a previously valid range as another sheet.
+    try:
+        addresses = split_ranges(answer_position, max_ranges=MAX_ANSWER_RANGES)
+        resolved = [resolve(workbook, address) for address in addresses]
+    except ToolError:
+        parsed = parse_answer_position(answer_position, default_sheet_name=workbook.sheetnames[0])
+        if len(parsed) > MAX_ANSWER_RANGES:
+            raise ToolError(f"At most {MAX_ANSWER_RANGES} answer ranges")
+        resolved = []
+        for name, address in parsed:
+            name = _resolve_sheet_name(workbook, name)
+            if name is None:
+                raise ToolError("Worksheet does not exist")
+            worksheet = workbook[name]
+            bounds = _cell_range_boundaries(address, max_row_hint=max(1, int(worksheet.max_row or 1)))
+            resolved.append((worksheet, bounds))
+    for worksheet, bounds in resolved:
         left, top, right, bottom = bounds
         cells += (right - left + 1) * (bottom - top + 1)
         if cells > MAX_ANSWER_CELLS:
