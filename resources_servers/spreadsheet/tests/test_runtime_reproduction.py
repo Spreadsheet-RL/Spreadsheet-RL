@@ -7,6 +7,7 @@ from resources_servers.spreadsheet.packaging.verify_runtime import (
     canonical_digest,
     junit_summary,
     pack_bundle,
+    repair_bundle,
     tree_manifest,
 )
 
@@ -30,8 +31,16 @@ def test_runtime_fingerprint_is_relocatable_but_detects_file_and_mode_changes(tm
 
 def test_junit_summary_counts_failures_errors_and_skips(tmp_path):
     path = tmp_path / "tests.xml"
-    path.write_text('<testsuites><testsuite tests="9" failures="1" errors="2" skipped="1"/></testsuites>')
-    assert junit_summary(path) == {"tests": 9, "failures": 1, "errors": 2, "skipped": 1, "passed": 5}
+    path.write_text(
+        '<testsuites><testsuite tests="9" failures="1" errors="2" skipped="1"/></testsuites>'
+    )
+    assert junit_summary(path) == {
+        "tests": 9,
+        "failures": 1,
+        "errors": 2,
+        "skipped": 1,
+        "passed": 5,
+    }
 
 
 def test_repaired_archive_is_deterministic_and_excludes_non_relocatable_venv(tmp_path):
@@ -58,3 +67,48 @@ def test_repaired_archive_refuses_live_sandbox_workspaces(tmp_path):
     with pytest.raises(ValueError, match="Live sandbox"):
         pack_bundle(bundle, tmp_path / "must-not-exist.tar.gz")
     assert not (tmp_path / "must-not-exist.tar.gz").exists()
+
+
+def test_glibc_repair_rejects_unreviewed_differences(tmp_path):
+    report = {
+        "root_difference_count": 1,
+        "root_difference_examples": ["usr/bin/python3.12"],
+    }
+    with pytest.raises(ValueError, match="four diagnosed"):
+        repair_bundle(
+            tmp_path / "bundle", tmp_path / "rebuilt", tmp_path, report, "fixed-commit"
+        )
+    assert not (tmp_path / "runtime-repaired.tar.gz").exists()
+
+
+def test_glibc_repair_changes_only_diagnosed_files_and_matches_rebuilt_root(tmp_path):
+    paths = [
+        "usr/lib/x86_64-linux-gnu/libc.so.6",
+        "usr/lib/x86_64-linux-gnu/libm.so.6",
+        "usr/lib/x86_64-linux-gnu/libpthread.so.0",
+        "usr/lib64/ld-linux-x86-64.so.2",
+    ]
+    bundle, rebuilt = tmp_path / "bundle", tmp_path / "rebuilt"
+    for root in (bundle / "python-root", rebuilt):
+        for relative in [*paths, "usr/bin/python3.12"]:
+            target = root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("aligned")
+    for relative in paths:
+        (bundle / "python-root" / relative).write_text("old")
+    expected = canonical_digest(tree_manifest(rebuilt))
+    report = {
+        "root_difference_count": 4,
+        "root_difference_examples": paths,
+        "rebuilt_root_sha256": expected,
+        "artifact_sha256": "parent",
+        "runtime_fingerprint_sha256": "packages",
+        "behavior_sha256": "behavior",
+        "tests": {"passed": 34, "skipped": 2},
+    }
+    result = repair_bundle(bundle, rebuilt, tmp_path, report, "fixed-commit")
+    assert result["repaired_root_matches_rebuilt"]
+    assert canonical_digest(tree_manifest(bundle / "python-root")) == expected
+    assert (bundle / "python-root/usr/bin/python3.12").read_text() == "aligned"
+    assert result["repair"]["parent_artifact_sha256"] == "parent"
+    assert result["repair"]["changed_runtime_files"] == sorted(paths)
