@@ -1,0 +1,151 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-18",
+  "candidate_tasks": 125,
+  "strict_recovered": 84,
+  "still_withheld": 41,
+  "candidate_verdicts": {
+    "unresolved_error": 17,
+    "recovered_strict": 84,
+    "recovered_scoring_only": 18,
+    "text_mismatch": 3,
+    "missing_sheet": 3
+  },
+  "groups": {
+    "finite_A1_parser": {
+      "checked": 69,
+      "verdicts": {
+        "recovered_strict": 63,
+        "recovered_scoring_only": 6
+      },
+      "strict_values_passed": 69,
+      "native_passed": 69,
+      "seed_passed": 63,
+      "negative_controls_passed": 69
+    },
+    "worksheet_resolution": {
+      "checked": 22,
+      "verdicts": {
+        "unresolved_error": 16,
+        "recovered_strict": 6
+      },
+      "strict_values_passed": 6,
+      "native_passed": 6,
+      "seed_passed": 6,
+      "negative_controls_passed": 6
+    },
+    "per_range_cell_limit": {
+      "checked": 10,
+      "verdicts": {
+        "recovered_strict": 1,
+        "text_mismatch": 3,
+        "recovered_scoring_only": 3,
+        "missing_sheet": 3
+      },
+      "strict_values_passed": 4,
+      "native_passed": 4,
+      "seed_passed": 1,
+      "negative_controls_passed": 4
+    },
+    "libreoffice_timeout": {
+      "checked": 3,
+      "verdicts": {
+        "recovered_scoring_only": 2,
+        "unresolved_error": 1
+      },
+      "strict_values_passed": 2,
+      "native_passed": 0,
+      "seed_passed": 1,
+      "negative_controls_passed": 2
+    },
+    "native_reader": {
+      "checked": 21,
+      "verdicts": {
+        "recovered_strict": 14,
+        "recovered_scoring_only": 7
+      },
+      "strict_values_passed": 21,
+      "native_passed": 17,
+      "seed_passed": 14,
+      "negative_controls_passed": 21
+    }
+  },
+  "full_audit": {
+    "run_id": "recovery-125-c9a1a72005c2",
+    "source_commit": "c9a1a72005c28f087fac45a5edab91ed11d29566",
+    "modal_app_id": "ap-hPEK08CZ9IZRb7KyKAWdXn",
+    "tasks_checked": 8647,
+    "baseline_ids_checked": 7685,
+    "baseline_regressions": 0,
+    "workers": 8,
+    "runtime_artifact": {
+      "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+      "revision": "36f3a2cdd2506ca61979d90998d7df41d5845014",
+      "filename": "spreadsheet-gym-ubuntu24.04-x86_64-repro1.tar.gz",
+      "sha256": "151ae1135a44aa8d8f993a9bfc22306bbb0e9c0283c7c6e31de8405f94fb15d4",
+      "bytes": 288223870,
+      "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d",
+      "repair_source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576"
+    },
+    "dataset_revision": "6f274cd4cbc27e656d7ddae7c3b591669866dc84"
+  },
+  "seed_gate_recheck": {
+    "run_id": "seed-gates-9ec370da7cdb-832061ea",
+    "source_commit": "9ec370da7cdbca965f3a1960e71d61996882a5c5",
+    "full_audit_commit": "c9a1a72005c28f087fac45a5edab91ed11d29566",
+    "service_and_schema_trees_identical": true,
+    "source_run": "recovery-125-c9a1a72005c2",
+    "original_summary_sha256": "491addf627a05bea7b4e75c5aaa3204cb705eb147eb43e56e1e7fe8947359f74",
+    "original_candidates_sha256": "10501c462632f8aec5f02d7fc91138b0f354ad169850b2e17abf77f5cf9c5208",
+    "checked": 102,
+    "workers_max": 8,
+    "app_id": "ap-NJ9po8ABYZhq8dndsMpT6k"
+  },
+  "recovered_by_split": {
+    "train": 12,
+    "test": 72
+  },
+  "oracle_bytes_unchanged": true,
+  "value_comparator_unchanged": true,
+  "value_comparator_sha256": "597b7324054749692888af91744696aa8e3beedef71945256010d4b2f5f8bfa3",
+  "recovered_requires_extended_timeout": 0,
+  "checks": {
+    "independent_recalculations": 2,
+    "strict_original_cached_oracle": true,
+    "native_roundtrip": true,
+    "seed_cells_formulas_preserved": true,
+    "wrong_answer_reward_zero": true
+  },
+  "remaining_gate_causes_overlapping": {
+    "seed_roundtrip: logical_cells_or_formulas_changed": 11,
+    "native_roundtrip: EnvironmentError: LibreOffice worker timed out": 2,
+    "seed_roundtrip: EnvironmentError: LibreOffice worker timed out": 1,
+    "seed_roundtrip: ValueError: Seed content scan budget exceeded": 1,
+    "native_roundtrip: ValueError: Value must be ISO datetime format": 1,
+    "seed_roundtrip: ValueError: Value must be ISO datetime format": 1,
+    "native_roundtrip: IndexError: list index out of range": 3,
+    "seed_roundtrip: IndexError: list index out of range": 3
+  },
+  "local_tests": {
+    "passed": 168,
+    "skipped": 12
+  },
+  "linux_full_audit_tests": {
+    "passed": 37,
+    "skipped": 2
+  },
+  "linux_seed_gate_tests": {
+    "passed": 31,
+    "skipped": 1
+  },
+  "private_evidence": {
+    "volume": "spreadsheet-gym-runtime-builds",
+    "full_run": "audit-runs/recovery-125-c9a1a72005c2",
+    "seed_gate_run": "audit-runs/seed-gates-9ec370da7cdb-832061ea",
+    "summary_sha256": "4f4e01b4925653b957347ae3c887d5bf6d093d74036ae11d73a8766ae6e55961",
+    "candidate_report_sha256": "cacc42f5f3099fb32d0f8da3a95424a954bd0aaf9fcc3d1495ff1a11fcc30c1e"
+  },
+  "training_data_exported": false,
+  "company_service_updated": false,
+  "policy": "No oracle replacement, tolerance increase, task-ID patches, live service/YAML/SH/VAI runtime change. Final counts exclude the four earlier recoveries."
+}
