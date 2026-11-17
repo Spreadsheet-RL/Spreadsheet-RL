@@ -7,6 +7,7 @@ import pytest
 from resources_servers.spreadsheet.packaging.prepare_existing_launcher import (
     apply_updates,
     edit_launcher,
+    gpu_layout,
     patch_yaml,
     prepare_values,
     replace_atomic,
@@ -72,7 +73,11 @@ token_ids:
     assert "unused_judge" in base["env"]["nemo_gym"]
 
 
-def test_existing_launcher_uses_short_ipc_and_preserves_activation_and_full_entrypoint(tmp_path):
+@pytest.mark.parametrize(
+    "selected",
+    [None, {"indices": [0, 1, 2, 3, 4, 5], "uuids": ["GPU-" + str(i) for i in range(6)], "hostname": "train-node"}],
+)
+def test_existing_launcher_uses_short_ipc_and_preserves_activation_and_full_entrypoint(tmp_path, selected):
     text = """#!/bin/bash
 SCRIPT_DIR=/fixture
 CONFIG_PATH="${SCRIPT_DIR}/qwen_test.yaml"
@@ -89,6 +94,7 @@ printf "Training ended.\\n"
         Path("/fixture/smoke_driver.py"),
         Path("/fixture/gym"),
         ["127.0.0.1", "172.29.185.171"],
+        selected,
     )
     subprocess.run(["bash", "-n"], input=edited, text=True, check=True)
     assert '--ray-root "${SPREADSHEET_IPC_ROOT}"' in edited
@@ -97,8 +103,60 @@ printf "Training ended.\\n"
     assert "copy_gym_venvs.sh" in edited
     assert "${PIPESTATUS[0]}" in edited and edited.endswith('exit "${spreadsheet_train_rc}"\n')
     assert "max_num_steps" not in edited
+    if selected:
+        assert "--gpu-indices '0,1,2,3,4,5'" in edited
+        assert "--gpu-uuids 'GPU-0,GPU-1,GPU-2,GPU-3,GPU-4,GPU-5'" in edited
+        assert "--expected-hostname 'train-node'" in edited
+    else:
+        assert "--gpu-indices" not in edited
     with pytest.raises(ValueError, match="already patched"):
         edit_launcher(edited, Path("/fixture/qwen_test.yaml"), Path("/fixture/driver.py"), Path("/fixture/gym"), [])
+
+
+def test_six_gpu_profile_only_changes_resource_counts_and_preserves_unresolved_judges():
+    base = OmegaConf.create(
+        {
+            "cluster": {"num_nodes": 1, "gpus_per_node": 2},
+            "grpo": {"num_prompts_per_step": 128, "num_generations_per_prompt": 8, "max_num_steps": 676767},
+            "policy": {
+                "megatron_cfg": {"tensor_model_parallel_size": 1},
+                "generation": {
+                    "max_new_tokens": 32638,
+                    "vllm_cfg": {"tensor_parallel_size": 1},
+                    "colocated": {"enabled": False, "resources": {"gpus_per_node": 1, "num_nodes": 1}},
+                },
+            },
+            "env": {"unused_judge": "${missing_judge_url}"},
+        }
+    )
+    original = OmegaConf.to_container(base, resolve=False)
+    changes, layout = gpu_layout(base, {"indices": list(range(6))}, 2)
+    assert layout == {"train_gpus": 4, "rollout_gpus": 2, "data_parallel_size": 4}
+    for path, value in changes:
+        OmegaConf.update(base, ".".join(path), value)
+    assert base.cluster.gpus_per_node == 6
+    assert base.policy.generation.colocated.resources.gpus_per_node == 2
+    result = OmegaConf.to_container(base, resolve=False)
+    original["cluster"]["gpus_per_node"] = 6
+    original["policy"]["generation"]["colocated"]["resources"]["gpus_per_node"] = 2
+    assert result == original
+
+
+@pytest.mark.parametrize(
+    "rollout,train_tp,rollout_tp,opd",
+    [(0, 1, 1, False), (6, 1, 1, False), (2, 3, 1, False), (2, 1, 3, False), (2, 1, 1, True)],
+)
+def test_invalid_resource_splits_or_opd_are_rejected(rollout, train_tp, rollout_tp, opd):
+    base = {
+        "cluster": {"num_nodes": 1},
+        "on_policy_distillation": {"enabled": opd},
+        "policy": {
+            "megatron_cfg": {"tensor_model_parallel_size": train_tp},
+            "generation": {"vllm_cfg": {"tensor_parallel_size": rollout_tp}},
+        },
+    }
+    with pytest.raises(ValueError):
+        gpu_layout(base, {"indices": list(range(6))}, rollout)
 
 
 def test_atomic_replacement_and_private_backup_are_restorable(tmp_path):

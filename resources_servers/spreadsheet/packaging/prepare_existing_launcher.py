@@ -103,7 +103,38 @@ def prepare_values(base, cache_root, config_paths, data_path, metadata):
     return changes
 
 
-def edit_launcher(text, config, driver, cache_root, direct_hosts):
+def gpu_layout(base, scope, rollout_gpus):
+    if int(base["cluster"]["num_nodes"]) != 1:
+        raise ValueError("Selected GPU profile supports the existing single-node layout only")
+    if (
+        base.get("on_policy_distillation", {}).get("enabled", False)
+        or base.get("grpo", {}).get("adv_estimator", {}).get("name") == "opd"
+    ):
+        raise ValueError("This RLVR GPU profile requires OPD to be disabled")
+    count = len(scope["indices"])
+    if not 0 < rollout_gpus < count:
+        raise ValueError("Reserve a positive GPU count for both training and rollout")
+    training = count - rollout_gpus
+    megatron = base["policy"]["megatron_cfg"]
+    parallel = 1
+    for field in ("tensor_model_parallel_size", "pipeline_model_parallel_size", "context_parallel_size"):
+        parallel *= int(megatron.get(field, 1))
+    generation = base["policy"]["generation"]
+    gen_parallel = int(generation["vllm_cfg"].get("tensor_parallel_size", 1)) * int(
+        generation["vllm_cfg"].get("pipeline_parallel_size", 1)
+    )
+    if training % parallel or rollout_gpus % gen_parallel:
+        raise ValueError("Train/rollout GPU counts do not divide the configured model parallel sizes")
+    changes = [
+        (["cluster", "gpus_per_node"], count),
+        (["policy", "generation", "colocated", "enabled"], False),
+        (["policy", "generation", "colocated", "resources", "gpus_per_node"], rollout_gpus),
+        (["policy", "generation", "colocated", "resources", "num_nodes"], 1),
+    ]
+    return changes, {"train_gpus": training, "rollout_gpus": rollout_gpus, "data_parallel_size": training // parallel}
+
+
+def edit_launcher(text, config, driver, cache_root, direct_hosts, gpu_scope=None):
     if "# Spreadsheet full-training IPC" in text:
         raise ValueError("Launcher already patched; inspect its receipt before applying again")
     if f'CONFIG_PATH="${{SCRIPT_DIR}}/{config.name}"' not in text:
@@ -130,9 +161,20 @@ def edit_launcher(text, config, driver, cache_root, direct_hosts):
         'export no_proxy="${NO_PROXY}"\n'
     )
     result = text.replace(anchor, block + anchor)
+    gpu_arguments = ""
+    if gpu_scope:
+        gpu_arguments = (
+            " --gpu-indices "
+            + quote(",".join(map(str, gpu_scope["indices"])))
+            + " --gpu-uuids "
+            + quote(",".join(gpu_scope["uuids"]))
+            + " --expected-hostname "
+            + quote(gpu_scope["hostname"])
+        )
     result = result.replace(
         old,
-        'python -B "${SPREADSHEET_DRIVER}" --entrypoint "${NEMO_RL_BASE_DIR}/examples/nemo_gym/run_grpo_nemo_gym.py" --config "${CONFIG_PATH}" --ray-root "${SPREADSHEET_IPC_ROOT}"',
+        'python -B "${SPREADSHEET_DRIVER}" --entrypoint "${NEMO_RL_BASE_DIR}/examples/nemo_gym/run_grpo_nemo_gym.py" --config "${CONFIG_PATH}" --ray-root "${SPREADSHEET_IPC_ROOT}"'
+        + gpu_arguments,
     )
     result = result.replace(pipeline, pipeline + "\nspreadsheet_train_rc=${PIPESTATUS[0]}")
     return result.rstrip() + '\nexit "${spreadsheet_train_rc}"\n'
@@ -187,10 +229,16 @@ def main():
     for name in ("config", "launcher", "smoke-config", "train-data", "private-config"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--expected-hostname", required=True)
+    parser.add_argument("--visible-gpus", help="Explicit physical indices, for example 0,1,2,3,4,5")
+    parser.add_argument(
+        "--rollout-gpus", type=int, help="vLLM rollout GPUs within the selected set; remaining GPUs train"
+    )
     parser.add_argument(
         "--output-launcher", type=Path, help="New launcher beside the original; default singlenode_spreadsheet.sh"
     )
     args = parser.parse_args()
+    if bool(args.visible_gpus) != (args.rollout_gpus is not None):
+        parser.error("Use --visible-gpus and --rollout-gpus together")
     if socket.gethostname() != args.expected_hostname:
         parser.error("Wrong training instance")
     for path in (args.config, args.launcher, args.smoke_config, args.train_data, args.private_config):
@@ -218,6 +266,17 @@ def main():
     register_omegaconf_resolvers()
     contract = verify_contract(Path(load_config.__code__.co_filename).resolve().parents[2], DEFAULT_CONTRACT)
     base = load_config(args.config)
+    selected = None
+    layout = None
+    if args.visible_gpus:
+        if __package__:
+            from .gpu_scope import inspect_selected, parse_indices
+        else:
+            from gpu_scope import inspect_selected, parse_indices
+        selected = inspect_selected(parse_indices(args.visible_gpus), args.expected_hostname)
+        # Resolve only the layout fields; unrelated inherited env interpolations
+        # may refer to judge servers that this migration removes below.
+        gpu_changes, layout = gpu_layout(base, selected, args.rollout_gpus)
     reference = load_config(args.smoke_config)
     cache = Path(reference.env.nemo_gym.uv_venv_dir).resolve()
     gym_root = Path(PARENT_DIR).resolve()
@@ -268,6 +327,8 @@ def main():
     changes = prepare_values(
         OmegaConf.to_container(base, resolve=False), cache, paths, args.train_data.resolve(), metadata
     )
+    if selected:
+        changes.extend(gpu_changes)
     text = original[args.config].decode()
     expected = copy.deepcopy(base)
     for path, value in changes:
@@ -279,7 +340,12 @@ def main():
         else:
             text = patch_yaml(text, path, {"_override_": True, **value} if path == ["env"] else value)
     driver = Path(__file__).with_name("smoke_driver.py").resolve()
-    launcher = edit_launcher(original[args.launcher].decode(), args.config, driver, cache, hosts)
+    if layout:
+        batch_size = int(expected.policy.train_global_batch_size)
+        micro_batch = int(expected.policy.train_micro_batch_size)
+        if batch_size % (layout["data_parallel_size"] * micro_batch):
+            raise ValueError("Train global batch size must be divisible by the selected DP x micro batch layout")
+    launcher = edit_launcher(original[args.launcher].decode(), args.config, driver, cache, hosts, selected)
     with tempfile.NamedTemporaryFile(
         mode="w", suffix=".yaml", prefix=".spreadsheet-full-", dir=args.config.parent
     ) as candidate:
@@ -298,6 +364,8 @@ def main():
         "model": metadata,
         "rows": count,
         "cache_root": str(cache),
+        "selected_gpus": selected,
+        "gpu_layout": layout,
         "service": service,
         "trainer_contract": contract,
         "script_sha256": digest(Path(__file__).read_bytes()),
@@ -343,6 +411,7 @@ def main():
                 "event": "EXISTING_SPREADSHEET_LAUNCHER_PREPARED",
                 "receipt": str(receipt_path),
                 "rows": count,
+                "gpu_layout": layout,
                 "launcher": str(output_launcher.resolve()),
                 "original_launcher_unchanged": args.launcher.read_bytes() == original[args.launcher],
                 "training_started": False,

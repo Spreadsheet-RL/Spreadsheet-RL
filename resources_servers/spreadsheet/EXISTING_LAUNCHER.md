@@ -17,6 +17,7 @@ Nội dung và permissions của `singlenode_main.sh` giữ nguyên.
 | `policy.generation.vllm_cfg.http_server_serving_chat_kwargs.tool_parser` | Đọc chat template thật; Qwen3-4B đã test dùng `hermes` |
 | `token_ids` | Đọc tokenizer thật; Qwen3-4B đã test EOS `151645`, không dùng `151643` của YAML cũ |
 | `policy.megatron_cfg.sequence_parallel` | `false` khi TP=1 |
+| Profile `--visible-gpus 0,1,2,3,4,5 --rollout-gpus 2` | Tổng 6 GPU: 4 train, 2 vLLM sinh rollout của cùng student; không dùng teacher OPD |
 | Launcher mới | Tái dùng activation, copy/cache helper và NeMo-RL entrypoint từ launcher gốc; dùng driver đặt Ray log_dir vào IPC ngắn và truyền đúng exit code |
 
 Không lấy batch size, số bước, giới hạn sinh, GPU memory hoặc tắt checkpoint từ
@@ -24,11 +25,19 @@ smoke sang full train. Với file đã cung cấp, `128 × 8`, `max_num_steps=67
 sequence length, logging và checkpoint settings được giữ nguyên. Helper kiểm
 effective config trước khi ghi. Unrelated YAML comments cũng được giữ lại.
 
-`smoke_driver.py` chỉ là wrapper đặt `init_ray(log_dir=...)` rồi gọi entrypoint
-cũ với YAML đã chọn; bản thân driver không áp giới hạn hai bước hay bốn task.
+`smoke_driver.py` đặt `init_ray(log_dir=...)` rồi gọi entrypoint cũ với YAML đã
+chọn; bản thân driver không áp giới hạn hai bước hay bốn task.
 Launcher được tạo giữ nguyên thư mục `SCRIPT_DIR` của bản gốc và tạo IPC root
 riêng trong `/tmp` cho mỗi lần chạy, giữ log/checkpoint cũ
 ở vị trí đã cấu hình và bypass proxy cho các địa chỉ service/model nội bộ.
+
+Với profile GPU, helper đọc UUID của từng GPU đã chọn, kiểm tra VRAM, utilization
+và compute processes. Launcher mới kiểm tra lại hostname/UUID/GPU trống rồi đặt
+`CUDA_VISIBLE_DEVICES` bằng UUID trước khi import NeMo-RL. Driver từ chối cấp
+training actors nếu Ray cluster không có đúng số GPU và tag UUID của profile.
+Không tự dừng process hay Ray cluster đang có. GPU 6–7 nằm ngoài profile này.
+Ray tự phân nhóm 4 train/2 rollout trong tập đã chọn; profile không gán cố định
+vai trò train/rollout vào từng index vật lý.
 
 ## Lệnh chuẩn bị một lần
 
@@ -51,7 +60,9 @@ bash "$spreadsheet_source/resources_servers/spreadsheet/packaging/prepare_existi
   --smoke-config "$spreadsheet_project/runs/smoke_train_aa4cf4d/smoke.yaml" \
   --train-data "$spreadsheet_project/data/6f274cd4cbc27e656d7ddae7c3b591669866dc84/prepared-SP06/nemo_gym/train.jsonl" \
   --private-config "$spreadsheet_project/.secrets/spreadsheet/gym.private.yaml" \
-  --expected-hostname vt-super-rl-test-ultra-selfbuilt-67-tra8-0-0
+  --expected-hostname vt-super-rl-test-ultra-selfbuilt-67-tra8-0-0 \
+  --visible-gpus 0,1,2,3,4,5 \
+  --rollout-gpus 2
 ```
 
 Thấy `EXISTING_SPREADSHEET_LAUNCHER_PREPARED` mới chạy launcher được helper tạo:
@@ -74,6 +85,8 @@ gốc không cần khôi phục.
 Pure migration tests và Bash syntax checks đã pass, gồm cả chính nội dung YAML/
 launcher người dùng cung cấp. Test bảo toàn lịch full train, comments, cache
 activation, exit code, backup/restore và việc không ghi vào launcher gốc.
+Profile 6 GPU có unit tests cho chia 4/2, pin UUID, GPU đang bận và Ray sai tập GPU;
+các test này dùng dữ liệu mô phỏng, chưa thay thế cho lần chạy trên B200 thật.
 Việc apply lên node hiện tại chưa được
 thực hiện trong lượt này. Smoke trước chỉ kiểm chứng hai bước; cấu hình full
 `128 × 8`, 32k context và mức concurrency gốc chưa qua stress test dài.
