@@ -51,6 +51,16 @@ có thể lệch sau khi move. Các field YAML trong báo cáo là giá trị kh
 tiếp, chưa resolve `defaults`/interpolation. Đường dẫn cache truyền vào là vị trí
 cần kiểm tra, không phải đường dẫn đã được xác nhận. Script không tự sửa file.
 
+Nếu Python trực tiếp vẫn đúng nhưng activation giữ prefix cũ, dùng
+`packaging/repair_venv_entrypoints.py --report <report.json>` để xem plan. Thêm
+`--apply --backup-dir <thư-mục-chưa-tồn-tại>` để sửa đúng ba venv trong report.
+Script chỉ sửa activation và console entrypoints trỏ đến prefix venv cũ, giữ
+mode/owner, lưu backup/hash/receipt và thử activation của cả ba venv. Nếu kiểm
+tra lỗi, nó khôi phục các entrypoint đã sửa. Rollback thủ công dùng
+`--rollback <receipt.json> --expected-hostname <node>`; script kiểm hash để không
+ghi đè thay đổi mới hơn. Nó không sửa package/editable imports, YAML hay smoke;
+những phần đó vẫn cần kiểm chứng riêng trước train.
+
 Giữ model và cấu hình hiện tại của người dùng khi cập nhật path. Smoke Qwen3-4B
 trước đây không xác nhận cấu hình Qwen3-32B mới; cần kiểm tra runtime, parallel
 sizes và chạy lại trên cấu hình mới sau khi xử lý xong relocation.
