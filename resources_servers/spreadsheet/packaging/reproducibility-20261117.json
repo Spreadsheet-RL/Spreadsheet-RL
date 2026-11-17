@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "date": "2026-11-17",
+  "scope": "Pinned-artifact offline redeployment and sandbox reconstruction; not fresh apt/PyPI resolution",
+  "artifact": {
+    "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+    "revision": "36f3a2cdd2506ca61979d90998d7df41d5845014",
+    "filename": "spreadsheet-gym-ubuntu24.04-x86_64-repro1.tar.gz",
+    "sha256": "151ae1135a44aa8d8f993a9bfc22306bbb0e9c0283c7c6e31de8405f94fb15d4",
+    "bytes": 288223870,
+    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d",
+    "repair_source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576"
+  },
+  "repair": {
+    "source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576",
+    "app_id": "ap-6g8iIDIAUSfCXy8Ug1VJN1",
+    "archive_identical_across_two_builds": true,
+    "kind": "align_python_root_with_locked_offline_debs",
+    "parent_artifact_sha256": "a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9",
+    "repair_source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576",
+    "changed_runtime_files": [
+      "usr/lib/x86_64-linux-gnu/libc.so.6",
+      "usr/lib/x86_64-linux-gnu/libm.so.6",
+      "usr/lib/x86_64-linux-gnu/libpthread.so.0",
+      "usr/lib64/ld-linux-x86-64.so.2"
+    ],
+    "root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+    "runtime_fingerprint_sha256": "15ee6cabcc984d81ba5cbab7ca9a8bf9ec0076c5ab858185ca7a92520c0fd4a8",
+    "behavior_sha256": "92c0d4ff813f0b4ffc3eec76a49109e764b3ea17a46ec7a8ec68f383e5acd6c2",
+    "tests": {
+      "tests": 36,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 2,
+      "passed": 34
+    }
+  },
+  "clean_reinstall": {
+    "source_commit": "dc2d5c00a0277c25cb030192d6d82cbff2e4fb00",
+    "app_id": "ap-TjI4rpM9cc3pbHcat4cghB",
+    "run_id": "reproduce-2a3aad7f18f9431b907c518d86174506",
+    "checks_passed": true,
+    "independent_containers": true,
+    "equal_fingerprints": {
+      "runtime_fingerprint_sha256": true,
+      "rebuilt_root_sha256": true,
+      "behavior_sha256": true
+    },
+    "workers": [
+      {
+        "label": "a",
+        "checks_passed": true,
+        "external_network_probe_blocked": true,
+        "modal_task_id": "ta-01M7M10NRBH0K3JTV4R00XJWGR",
+        "function_call_id": "fc-01M7M10N744F0HB6PSMFSQXZWC",
+        "runtime_fingerprint_sha256": "15ee6cabcc984d81ba5cbab7ca9a8bf9ec0076c5ab858185ca7a92520c0fd4a8",
+        "published_root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+        "rebuilt_root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+        "root_file_count": 4899,
+        "root_difference_count": 0,
+        "behavior": {
+          "engine": "LibreOffice 24.2.7.2 420(Build:2)",
+          "wrong": {
+            "reward": 0.0,
+            "matched_cells": 0,
+            "total_cells": 1,
+            "cell_accuracy": 0.0
+          },
+          "correct": {
+            "reward": 1.0,
+            "matched_cells": 1,
+            "total_cells": 1,
+            "cell_accuracy": 1.0
+          },
+          "recalculated_value": 42,
+          "python_isolation": "chroot_uid_seccomp",
+          "originals_unchanged": true
+        },
+        "behavior_sha256": "92c0d4ff813f0b4ffc3eec76a49109e764b3ea17a46ec7a8ec68f383e5acd6c2",
+        "tests": {
+          "tests": 36,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 2,
+          "passed": 34
+        }
+      },
+      {
+        "label": "b",
+        "checks_passed": true,
+        "external_network_probe_blocked": true,
+        "modal_task_id": "ta-01M7M10P9XGNB9TA96FRVS1EZR",
+        "function_call_id": "fc-01M7M10NGAB9T345EF0TD43F6F",
+        "runtime_fingerprint_sha256": "15ee6cabcc984d81ba5cbab7ca9a8bf9ec0076c5ab858185ca7a92520c0fd4a8",
+        "published_root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+        "rebuilt_root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+        "root_file_count": 4899,
+        "root_difference_count": 0,
+        "behavior": {
+          "engine": "LibreOffice 24.2.7.2 420(Build:2)",
+          "wrong": {
+            "reward": 0.0,
+            "matched_cells": 0,
+            "total_cells": 1,
+            "cell_accuracy": 0.0
+          },
+          "correct": {
+            "reward": 1.0,
+            "matched_cells": 1,
+            "total_cells": 1,
+            "cell_accuracy": 1.0
+          },
+          "recalculated_value": 42,
+          "python_isolation": "chroot_uid_seccomp",
+          "originals_unchanged": true
+        },
+        "behavior_sha256": "92c0d4ff813f0b4ffc3eec76a49109e764b3ea17a46ec7a8ec68f383e5acd6c2",
+        "tests": {
+          "tests": 36,
+          "failures": 0,
+          "errors": 0,
+          "skipped": 2,
+          "passed": 34
+        }
+      }
+    ]
+  },
+  "legacy": {
+    "artifact": {
+      "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+      "revision": "a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1",
+      "filename": "spreadsheet-gym-ubuntu24.04-x86_64.tar.gz",
+      "sha256": "a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9",
+      "bytes": 288364234,
+      "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d"
+    },
+    "original_root_sha256": "f2c419b8bfe6101ace082159ddd9187a252b1ed85c29231f250e21aa2d1aaf9b",
+    "differences": [
+      "usr/lib/x86_64-linux-gnu/libc.so.6",
+      "usr/lib/x86_64-linux-gnu/libm.so.6",
+      "usr/lib/x86_64-linux-gnu/libpthread.so.0",
+      "usr/lib64/ld-linux-x86-64.so.2"
+    ],
+    "functional_tests_passed": 34,
+    "strict_reproduction_passed": false
+  },
+  "local_checks": {
+    "pytest_passed": 101,
+    "pytest_skipped": 4,
+    "scope": "Integration tests using the existing cached Gym development runtime; Linux isolation and LibreOffice tested remotely",
+    "ruff_changed_files": "passed",
+    "ruff_unconfigured_full_scan": "six existing E402/F811 findings in imported tests; no unrelated edits"
+  }
+}

@@ -23,7 +23,7 @@ revision, kích thước và SHA256. Artifact hiện tại có source `9dcc7e1` 
 `.deb`, wheel, Python root cần thiết. Không cần build lại dependency khi chỉ đổi
 source/frontend/config.
 
-Tải archive và `SHA256SUMS` từ **cùng revision trong lock**, qua proxy của node
+Tải archive và `SHA256SUMS-repro1` từ **cùng revision trong lock**, qua proxy của node
 nếu cần. Kiểm SHA256 ngoài archive, giải nén vào thư mục mới trên node-local
 storage, rồi chạy `bash install_offline.sh` với quyền root. Installer kiểm tra
 checksum nội bộ, cài `.deb` bằng `--no-download`, pip bằng `--no-index`, tạo venv
@@ -126,8 +126,8 @@ phép upload vào repository runtime đã có; credential chỉ truyền qua Mod
 Nếu upload gián đoạn, `::resume_publication --report-path REPORT --hf-python PYTHON`
 tái dùng qualification report và archive trên Volume, không chạy lại test.
 
-`runtime.candidate.lock.json` ghi artifact sửa đã publish nhưng chưa thay lock
-mặc định. Test lại archive tải từ HF, không dùng repair mode:
+`runtime.candidate.lock.json` giữ snapshot đã dùng để test artifact sửa trước khi
+promote. Test lại archive tải từ HF, không dùng repair mode:
 
 ```bash
 SPREADSHEET_RUNTIME_LOCK=runtime.candidate.lock.json \
@@ -138,3 +138,23 @@ modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_reprod
 Chỉ promote candidate sau khi cả hai clean offline installs pass, root đã phát
 hành bằng root dựng lại và đúng các fingerprint trong lock. Lock cũ được giữ
 riêng để tái hiện lỗi ban đầu.
+
+### Kết quả đã chạy ngày 2026-11-17
+
+- Hai lần repair từ cùng parent artifact và cùng commit tạo archive **giống từng
+  byte**, SHA256 `151ae1135a44aa8d8f993a9bfc22306bbb0e9c0283c7c6e31de8405f94fb15d4`.
+- Archive được upload rồi tải lại từ HF revision
+  `36f3a2cdd2506ca61979d90998d7df41d5845014`; hai container sạch khác cài offline,
+  mỗi container **34 pass, 2 skip**, không failure/error.
+- Sandbox 4.899 entries khớp bytes/mode/symlink với root dựng lại: **0 khác biệt**.
+  Runtime/package, root và behavior fingerprints giống nhau giữa hai container
+  và đúng lock. Chroot/UID/seccomp pass; công thức liên sheet cho 42, reward đúng
+  1/sai 0; seed và oracle giữ nguyên.
+- Default `runtime.lock.json` đã promote bản này. `runtime.legacy.lock.json`
+  giữ artifact cũ để tái hiện bốn khác biệt. Không tự thay runtime đang chạy trên
+  service instance; bộ cài mới dành cho lần triển khai tiếp theo vào thư mục sạch.
+
+Receipt đã bỏ dữ liệu riêng nằm trong
+[reproducibility-20261117.json](packaging/reproducibility-20261117.json), có source
+commits, immutable artifact, task/call IDs và fingerprints. Report/log đầy đủ giữ
+trong `spreadsheet-gym-runtime-builds/reproduction-results/` trên Modal Volume.

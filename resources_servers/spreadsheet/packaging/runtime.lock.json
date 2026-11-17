@@ -2,17 +2,29 @@
   "schema_version": 1,
   "artifact": {
     "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
-    "revision": "a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1",
-    "filename": "spreadsheet-gym-ubuntu24.04-x86_64.tar.gz",
-    "sha256": "a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9",
-    "bytes": 288364234,
-    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d"
+    "revision": "36f3a2cdd2506ca61979d90998d7df41d5845014",
+    "filename": "spreadsheet-gym-ubuntu24.04-x86_64-repro1.tar.gz",
+    "sha256": "151ae1135a44aa8d8f993a9bfc22306bbb0e9c0283c7c6e31de8405f94fb15d4",
+    "bytes": 288223870,
+    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d",
+    "repair_source_commit": "9e683cb302f7454b3474bca4e436dbecdff0b576"
   },
   "base_image": "ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec",
   "platform": "linux/amd64",
   "expected": {
     "libreoffice": "LibreOffice 24.2.7.2 420(Build:2)",
     "tests_passed": 34,
-    "tests_skipped": 2
+    "tests_skipped": 2,
+    "runtime_fingerprint_sha256": "15ee6cabcc984d81ba5cbab7ca9a8bf9ec0076c5ab858185ca7a92520c0fd4a8",
+    "rebuilt_root_sha256": "660381fb040eeeab5672a93271f67094387f1c28b827126d84e3fa89ed7da819",
+    "behavior_sha256": "92c0d4ff813f0b4ffc3eec76a49109e764b3ea17a46ec7a8ec68f383e5acd6c2"
+  },
+  "parent_artifact": {
+    "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+    "revision": "a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1",
+    "filename": "spreadsheet-gym-ubuntu24.04-x86_64.tar.gz",
+    "sha256": "a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9",
+    "bytes": 288364234,
+    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d"
   }
 }

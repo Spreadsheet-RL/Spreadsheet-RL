@@ -7,6 +7,11 @@ the runtime reproducibility contract. `runtime.lock.json` pins the published
 dependency artifact. `modal_reproduce.py` checks two independent offline Ubuntu
 installs, sandbox reconstruction, package/content fingerprints and real canaries;
 the worker logic is in `verify_runtime.py`. No runtime is installed on the Mac.
+The qualified 2026-11-17 repair is the default lock; its two independent builds
+produced identical archives, and two further clean offline installs passed.
+See [reproducibility-20261117.json](reproducibility-20261117.json) for evidence.
+`runtime.legacy.lock.json` retains the original four-file glibc drift;
+`runtime.candidate.lock.json` preserves the exact pre-promotion test input.
 
 Terminal commands should download an immutable release, verify its checksum, and
 invoke these files with node-specific paths. Keep conversion, contract checks,

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "artifact": {
+    "repository": "codemaivanngu/spreadsheet-gym-libreoffice-runtime",
+    "revision": "a4bb83d536bc3512ffa7e60bac4dcd6b0461c3d1",
+    "filename": "spreadsheet-gym-ubuntu24.04-x86_64.tar.gz",
+    "sha256": "a7eee8c396f6d1ee56ac8c2748a8d1bfdaacc3b7ae47a9a63998b718ade982e9",
+    "bytes": 288364234,
+    "source_commit": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d"
+  },
+  "base_image": "ubuntu@sha256:77eb101c607d6e3d4f5ad0c8a02c2136c689b98aba1f359e6502ba517e5c57ec",
+  "platform": "linux/amd64",
+  "expected": {
+    "libreoffice": "LibreOffice 24.2.7.2 420(Build:2)",
+    "tests_passed": 34,
+    "tests_skipped": 2
+  }
+}
