@@ -219,6 +219,12 @@ def build(code_commit: str, publish_repo: str = ""):
 
     write_checksums()
     subprocess.run(["bash", str(bundle / "install_offline.sh")], check=True, timeout=600)
+    # Installing the offline .deb closure can update glibc after the first
+    # sandbox was created. Align the shipped root with those exact packages.
+    aligned = bundle / "python-root-aligned"
+    receipt["rootfs_libraries"] = make_root(aligned, wheelhouse)
+    shutil.rmtree(runtime)
+    aligned.rename(runtime)
     # Verify the installer-created runtime, then omit this non-relocatable venv
     # from the archive. The node creates its own venv at its final path.
     subprocess.run(

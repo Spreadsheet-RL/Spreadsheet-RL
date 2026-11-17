@@ -5,6 +5,7 @@ Probe and inventory modes use the installer-created Python, not the host SDK.
 """
 
 import argparse
+import gzip
 import hashlib
 import json
 import os
@@ -58,6 +59,75 @@ def junit_summary(path):
     }
     counts["passed"] = counts["tests"] - counts["failures"] - counts["errors"] - counts["skipped"]
     return counts
+
+
+def archive_paths(bundle):
+    workspace_root = bundle / "python-root/workspaces"
+    if workspace_root.exists() and any(workspace_root.iterdir()):
+        raise ValueError("Live sandbox workspaces must not enter an artifact")
+    for path in sorted(bundle.rglob("*")):
+        parts = path.relative_to(bundle).parts
+        if "service-venv" in parts or ".pytest_cache" in parts or "__pycache__" in parts or path.suffix == ".pyc":
+            continue
+        yield path
+
+
+def pack_bundle(bundle, archive):
+    paths = list(archive_paths(bundle))
+    sums = [
+        digest(path) + "  " + str(path.relative_to(bundle))
+        for path in paths
+        if path.is_file() and not path.is_symlink() and path != bundle / "SHA256SUMS"
+    ]
+    (bundle / "SHA256SUMS").write_text("\n".join(sums) + "\n")
+    paths = [bundle, *archive_paths(bundle)]
+    with (
+        archive.open("xb") as target,
+        gzip.GzipFile(filename="", mode="wb", fileobj=target, mtime=0, compresslevel=3) as compressed,
+    ):
+        with tarfile.open(fileobj=compressed, mode="w", format=tarfile.PAX_FORMAT) as tar:
+            for path in paths:
+                info = tar.gettarinfo(str(path), arcname=str(Path(bundle.name) / path.relative_to(bundle)))
+                info.uid = info.gid = info.mtime = 0
+                info.uname = info.gname = ""
+                info.pax_headers = {}
+                if path.is_file() and not path.is_symlink():
+                    with path.open("rb") as stream:
+                        tar.addfile(info, stream)
+                else:
+                    tar.addfile(info)
+    return {"sha256": digest(archive), "bytes": archive.stat().st_size}
+
+
+def repair_bundle(bundle, rebuilt, work, report, source_commit):
+    allowed = {
+        "usr/lib/x86_64-linux-gnu/libc.so.6",
+        "usr/lib/x86_64-linux-gnu/libm.so.6",
+        "usr/lib/x86_64-linux-gnu/libpthread.so.0",
+        "usr/lib64/ld-linux-x86-64.so.2",
+    }
+    if report["root_difference_count"] != 4 or set(report["root_difference_examples"]) != allowed:
+        raise ValueError("Repair is limited to the four diagnosed glibc/loader files")
+    for relative in sorted(allowed):
+        source, target = rebuilt / relative, bundle / "python-root" / relative
+        if source.is_symlink() or target.is_symlink() or not source.is_file() or not target.is_file():
+            raise ValueError("Expected regular glibc files")
+        shutil.copy2(source, target)
+    repaired_sha = canonical_digest(tree_manifest(bundle / "python-root"))
+    assert repaired_sha == report["rebuilt_root_sha256"]
+    metadata = {
+        "kind": "align_python_root_with_locked_offline_debs",
+        "parent_artifact_sha256": report["artifact_sha256"],
+        "repair_source_commit": source_commit,
+        "changed_runtime_files": sorted(allowed),
+        "root_sha256": repaired_sha,
+        "runtime_fingerprint_sha256": report["runtime_fingerprint_sha256"],
+        "behavior_sha256": report["behavior_sha256"],
+        "tests": report["tests"],
+    }
+    (bundle / "runtime-reproduction.json").write_text(json.dumps(metadata, sort_keys=True, indent=2) + "\n")
+    result = pack_bundle(bundle, work / "runtime-repaired.tar.gz")
+    return {"repaired_root_matches_rebuilt": True, "repaired_archive": result, "repair": metadata}
 
 
 def run(argv, log, *, cwd=None, env=None, timeout=600):
@@ -170,13 +240,14 @@ def probe(bundle, work):
         "root_file_count": len(rebuilt_tree),
         "rebuilt_matches_published": not differences,
         "root_difference_examples": differences[:12],
+        "root_difference_count": len(differences),
         "rootfs_libraries": libraries,
         "behavior": behavior,
         "behavior_sha256": canonical_digest(behavior),
     }
 
 
-def install(archive, lock, work):
+def install(archive, lock, work, repair_commit=None):
     if work.exists():
         raise ValueError("Select a fresh work directory")
     work.mkdir(mode=0o700, parents=True)
@@ -265,11 +336,17 @@ def install(archive, lock, work):
         )
         report["tests"] = junit_summary(work / "tests.xml")
         expected = lock["expected"]
-        report["checks_passed"] = (
-            report["rebuilt_matches_published"]
-            and report["tests"]["passed"] == expected["tests_passed"]
+        tests_match = (
+            report["tests"]["passed"] == expected["tests_passed"]
             and report["tests"]["skipped"] == expected["tests_skipped"]
         )
+        if repair_commit:
+            if not tests_match:
+                raise ValueError("Do not repair an unqualified runtime")
+            report.update(repair_bundle(bundle, work / "rebuilt-python-root", work, report, repair_commit))
+        report["checks_passed"] = (
+            report["rebuilt_matches_published"] or report.get("repaired_root_matches_rebuilt", False)
+        ) and tests_match
         report["phase"] = "complete"
     except Exception as error:
         report["error"] = {"type": type(error).__name__, "message": str(error)}
@@ -285,13 +362,14 @@ def main():
     parser.add_argument("--archive", type=Path)
     parser.add_argument("--lock", type=Path)
     parser.add_argument("--work", type=Path)
+    parser.add_argument("--repair-commit")
     args = parser.parse_args()
     if args.mode == "inventory":
         result = inventory(args.bundle)
     elif args.mode == "probe":
         result = probe(args.bundle, args.work)
     else:
-        result = install(args.archive, json.loads(args.lock.read_text()), args.work)
+        result = install(args.archive, json.loads(args.lock.read_text()), args.work, args.repair_commit)
     print(json.dumps(result), flush=True)
     if args.mode == "install" and not result["checks_passed"]:
         raise SystemExit(1)
