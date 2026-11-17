@@ -101,6 +101,25 @@ conversion reuses existing files only when the hashes match.
 Only `data.train` is changed by the converter. Existing model settings, algorithm
 parameters, validation configuration and launcher remain byte-for-byte intact.
 
+## Convert Spreadsheet prompts for Qwen3-Coder
+
+To test Spreadsheet with a shared `qwen3_coder` parser, run the prompt converter
+next to the existing qualified dataset:
+
+```bash
+python3 convert_coder_prompts.py \
+  --input-dir /path/to/prepared/nemo_gym \
+  --manifest /path/to/prepared/libreoffice/manifest.qualified.jsonl \
+  --output-dir /path/to/prepared/nemo_gym_qwen3_coder_v1
+```
+
+The converter adds the Coder call syntax to the Spreadsheet system message and
+checks that both splits cover the original manifest exactly. It keeps all other
+row fields and writes a separate pair of JSONL files with checksum receipts.
+This step requires only Python on CPU. A rollout smoke must confirm that the
+checkpoint follows the example and that the server returns structured
+`function_call` and `function_call_output` entries.
+
 ## Gym source installation
 
 Select the active Gym source directory explicitly. The installer checks for its
