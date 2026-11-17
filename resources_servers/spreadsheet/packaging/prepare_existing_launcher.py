@@ -160,7 +160,12 @@ def edit_launcher(text, config, driver, cache_root, direct_hosts, gpu_scope=None
         'export NO_PROXY="${NO_PROXY:-},' + ",".join(direct_hosts) + '"\n'
         'export no_proxy="${NO_PROXY}"\n'
     )
-    result = text.replace(anchor, block + anchor)
+    if __package__:
+        from .patch_cache_validation import validation_command
+    else:
+        from patch_cache_validation import validation_command
+    validator = Path(__file__).with_name("validate_existing_cache.py").resolve()
+    result = text.replace(anchor, block + validation_command(validator, validator.parent))
     gpu_arguments = ""
     if gpu_scope:
         gpu_arguments = (

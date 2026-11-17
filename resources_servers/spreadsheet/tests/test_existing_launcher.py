@@ -100,7 +100,9 @@ printf "Training ended.\\n"
     assert '--ray-root "${SPREADSHEET_IPC_ROOT}"' in edited
     assert "/tmp/spreadsheet-rl.XXXXXXXX" in edited
     assert 'source "${NEMO_RL_UTILS_DIR}/use_custom_opt.sh"' in edited
-    assert "copy_gym_venvs.sh" in edited
+    assert "copy_gym_venvs.sh" not in edited
+    assert "validate_existing_cache.py" in edited
+    assert '--config "${CONFIG_PATH}" || exit $?' in edited
     assert "${PIPESTATUS[0]}" in edited and edited.endswith('exit "${spreadsheet_train_rc}"\n')
     assert "max_num_steps" not in edited
     if selected:

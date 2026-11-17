@@ -18,12 +18,21 @@ Nội dung và permissions của `singlenode_main.sh` giữ nguyên.
 | `token_ids` | Đọc tokenizer thật; Qwen3-4B đã test EOS `151645`, không dùng `151643` của YAML cũ |
 | `policy.megatron_cfg.sequence_parallel` | `false` khi TP=1 |
 | Profile `--visible-gpus 0,1,2,3,4,5 --rollout-gpus 2` | Tổng 6 GPU: 4 train, 2 vLLM sinh rollout của cùng student; không dùng teacher OPD |
-| Launcher mới | Tái dùng activation, copy/cache helper và NeMo-RL entrypoint từ launcher gốc; dùng driver đặt Ray log_dir vào IPC ngắn và truyền đúng exit code |
+| Launcher mới | Tái dùng activation và NeMo-RL entrypoint; kiểm tra ba venv Spreadsheet có sẵn, dùng driver đặt Ray log_dir vào IPC ngắn và truyền đúng exit code |
 
 Không lấy batch size, số bước, giới hạn sinh, GPU memory hoặc tắt checkpoint từ
 smoke sang full train. Với file đã cung cấp, `128 × 8`, `max_num_steps=676767`,
 sequence length, logging và checkpoint settings được giữ nguyên. Helper kiểm
 effective config trước khi ghi. Unrelated YAML comments cũng được giữ lại.
+
+Launcher Spreadsheet không gọi `copy_gym_venvs.sh`: script công ty này yêu cầu
+`math_with_judge/.venv` làm seed ngay cả khi task không dùng judge. Thay vào đó,
+`validate_existing_cache.py` đọc config hiệu lực và kiểm interpreter, source
+imports cùng Ray/OpenAI versions của đúng ba venv đã chuẩn bị. Nó không copy hay
+cài package; lỗi kiểm tra sẽ dừng launcher trước training. Với launcher đã tạo
+trước sửa này, `patch_cache_validation.py` thay đúng dòng gọi copy helper, lưu
+backup/receipt và giữ nguyên launcher gốc, YAML, helper công ty. Validator và
+thư mục helper được tham chiếu trong launcher cần được giữ lại ở path đã chọn.
 
 `smoke_driver.py` đặt `init_ray(log_dir=...)` rồi gọi entrypoint cũ với YAML đã
 chọn; bản thân driver không áp giới hạn hai bước hay bốn task.
