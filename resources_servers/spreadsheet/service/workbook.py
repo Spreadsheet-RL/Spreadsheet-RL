@@ -16,6 +16,8 @@ from .errors import ToolError
 
 MAX_CELLS = 100_000
 MAX_RETURN = 400
+MAX_ANSWER_RANGES = 4096
+MAX_ANSWER_CELLS = 1_000_000
 
 
 def check_archive(path: Path, max_bytes: int = 100 * 1024 * 1024) -> None:
@@ -32,12 +34,12 @@ def check_archive(path: Path, max_bytes: int = 100 * 1024 * 1024) -> None:
         raise ToolError("Invalid XLSX archive") from None
 
 
-def load(path: Path, *, values: bool = False):
+def load(path: Path, *, values: bool = False, read_only: bool = False):
     from openpyxl import load_workbook
 
     check_archive(path)
     try:
-        return load_workbook(path, data_only=values, keep_links=False)
+        return load_workbook(path, data_only=values, read_only=read_only, keep_links=False)
     except (ValueError, KeyError, TypeError, OSError) as exc:
         raise ToolError("Workbook cannot be opened") from exc
 
@@ -50,7 +52,7 @@ def json_value(value):
     return value
 
 
-def split_ranges(text: str) -> list[str]:
+def split_ranges(text: str, *, max_ranges: int = 20) -> list[str]:
     """Split commas outside a leading quoted sheet name (including doubled quotes)."""
     parts, current, quoted, at_start = [], [], False, True
     index = 0
@@ -73,8 +75,8 @@ def split_ranges(text: str) -> list[str]:
     if quoted:
         raise ToolError("Unclosed sheet-name quote")
     parts.append("".join(current).strip())
-    if len(parts) > 20 or any(not part for part in parts):
-        raise ToolError("Expected 1–20 A1 ranges")
+    if len(parts) > max_ranges or any(not part for part in parts):
+        raise ToolError(f"Expected 1–{max_ranges} A1 ranges")
     return parts
 
 
@@ -421,24 +423,62 @@ def normalize(value, epoch=None):
         return value
 
 
+def answer_regions(workbook, answer_position):
+    """Trusted task metadata has a separate range count and aggregate cell budget."""
+    regions, cells = [], 0
+    for address in split_ranges(answer_position, max_ranges=MAX_ANSWER_RANGES):
+        worksheet, bounds = resolve(workbook, address)
+        left, top, right, bottom = bounds
+        cells += (right - left + 1) * (bottom - top + 1)
+        if cells > MAX_ANSWER_CELLS:
+            raise ToolError(f"At most {MAX_ANSWER_CELLS} total answer cells")
+        regions.append((worksheet, bounds))
+    return regions
+
+
+def cell_equal(a, b, expected_epoch=None, produced_epoch=None):
+    # Keep the original value contract, including its two-decimal rounding.
+    if type(a) is type(b) and type(a) in (str, float, int, bool) and a == b:
+        return True
+    a, b = normalize(a, expected_epoch), normalize(b, produced_epoch)
+    return type(a) is type(b) and a == b
+
+
 def compare(oracle: Path, actual: Path, answer_position: str):
-    expected, produced = load(oracle, values=True), load(actual, values=True)
+    expected = load(oracle, values=True, read_only=True)
+    produced = None
     matched = total = 0
     try:
-        for address in split_ranges(answer_position):
-            ws, (left, top, right, bottom) = resolve(expected, address)
-            for row in ws.iter_rows(min_row=top, max_row=bottom, min_col=left, max_col=right):
-                for cell in row:
-                    total += 1
-                    if ws.title not in produced.sheetnames:
-                        continue
-                    a, b = cell.value, produced[ws.title][cell.coordinate].value
-                    # Preserve exact same-type primitive equality before normalization.
-                    equal = type(a) is type(b) and type(a) in (str, float, int, bool) and a == b
-                    if not equal:
-                        a, b = normalize(a, expected.epoch), normalize(b, produced.epoch)
-                        equal = type(a) is type(b) and a == b
-                    matched += bool(equal)
+        produced = load(actual, values=True, read_only=True)
+        for ws, (left, top, right, bottom) in answer_regions(expected, answer_position):
+            width = right - left + 1
+            total += width * (bottom - top + 1)
+            if ws.title not in produced.sheetnames:
+                continue
+            bounds = dict(
+                min_row=top,
+                max_row=bottom,
+                min_col=left,
+                max_col=right,
+                values_only=True,
+            )
+            original_rows = iter(ws.iter_rows(**bounds))
+            actual_rows = iter(produced[ws.title].iter_rows(**bounds))
+            empty = (None,) * width
+            for _ in range(top, bottom + 1):
+                originals, actuals = (
+                    next(original_rows, empty),
+                    next(actual_rows, empty),
+                )
+                for index in range(width):
+                    matched += bool(
+                        cell_equal(
+                            originals[index],
+                            actuals[index],
+                            expected.epoch,
+                            produced.epoch,
+                        )
+                    )
         if not total:
             raise ToolError("No answer cells in task metadata")
         return {
@@ -449,4 +489,5 @@ def compare(oracle: Path, actual: Path, answer_position: str):
         }
     finally:
         expected.close()
-        produced.close()
+        if produced is not None:
+            produced.close()

@@ -18,6 +18,38 @@ invoke these files with node-specific paths. Keep conversion, contract checks,
 source installation and YAML edits in the versioned scripts. Operator-specific
 paths and private keys stay outside public release artifacts.
 
+## Audit rejected tasks on Modal CPU
+
+`modal_audit_dataset.py` installs the pinned dependency artifact once into a
+cached image, downloads/checksums the pinned public data on Modal, and audits
+8,647 tasks with up to **eight independent CPU workers**. Each 50-task batch
+has a source/data/baseline identity and a hashed completion checkpoint. Resume
+by passing the same `--run-id`, full clean `--source-commit`, and batch size.
+
+```bash
+modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_audit_dataset.py \
+  --source-commit "$(git rev-parse HEAD)" --output-dir /path/to/new/audit-results
+```
+
+The baseline reader is loaded from the original source inside the locked bundle.
+The new scorer streams values, supports up to 4,096 metadata ranges and a total
+of one million answer cells; per-range and public tool limits remain bounded.
+Original exact/normalized cell equality is preserved, including the two-decimal
+rounding boundary. Numeric precision candidates are diagnostic labels only.
+
+Each task receives two independent oracle recalculations. Strict recoveries
+also undergo a temporary native-tool add/write/remove-sheet and recalc roundtrip.
+`recovered_scoring_only` tasks are withheld from recovered training rows.
+`recovered.manifest.jsonl` and `recovered.{train,test}.jsonl` contain only strict,
+tool-ready recoveries. This does not rewrite the active dataset or training YAML.
+The original node's historical ID membership must be checked separately if its
+per-task report is unavailable; matching a total alone does not establish it.
+
+`summary.json` contains counts, provenance and output hashes. Detailed per-cell
+reports and formulas stay in the private Modal Volume and local audit directory,
+outside public source bundles and policy observations. The worker implementation
+is `audit_rejections.py`; `--limit` is available for partial diagnostic runs.
+
 | Entrypoint | Required inputs | Result |
 | --- | --- | --- |
 | `convert_training_data.py` | `--input-dir` containing both qualified JSONL files; `--output-dir` | Routed `train.jsonl` / `test.jsonl`, conversion hashes and a separate run receipt |
