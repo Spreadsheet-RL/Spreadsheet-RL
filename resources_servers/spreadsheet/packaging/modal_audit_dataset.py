@@ -139,7 +139,7 @@ def subprocess_run(arguments, log, *, timeout=1800):
 @app.function(
     image=image, volumes={"/artifacts": VOLUME}, cpu=2, memory=8192, timeout=900
 )
-def prepare_inputs(run_id, source_commit, limit, batch_size):
+def prepare_inputs(run_id, source_commit, limit, batch_size, previous_run=""):
     import ssl
     import time
     import urllib.request
@@ -200,6 +200,12 @@ def prepare_inputs(run_id, source_commit, limit, batch_size):
             ],
             run / "prepare.log",
         )
+    previous = None
+    if previous_run:
+        from resources_servers.spreadsheet.packaging.recovery_cohort import prepare_cohort
+        if limit:
+            raise ValueError("Recovery audit requires full baseline coverage")
+        previous = prepare_cohort(run / "tasks.jsonl", run.parent / previous_run)
     tasks = min(limit, 8647) if limit else 8647
     identity = {
         "run_id": run_id,
@@ -212,6 +218,8 @@ def prepare_inputs(run_id, source_commit, limit, batch_size):
             (run / "tasks.jsonl").read_bytes()
         ).hexdigest(),
     }
+    if previous is not None:
+        identity["previous_audit"] = previous
     identity_path = run / "identity.json"
     if identity_path.exists() and json.loads(identity_path.read_text()) != identity:
         raise ValueError("Existing run belongs to a different audit contract")
@@ -226,6 +234,8 @@ def prepare_inputs(run_id, source_commit, limit, batch_size):
             "/dev/null",
             "-q",
             "/source/resources_servers/spreadsheet/tests/test_reward_readers.py",
+            "/source/resources_servers/spreadsheet/tests/test_answer_metadata.py",
+            "/source/resources_servers/spreadsheet/tests/test_ooxml_metadata.py",
             "/source/resources_servers/spreadsheet/tests/test_workbook.py",
             "/source/resources_servers/spreadsheet/tests/test_rejection_audit.py",
         ],
@@ -291,10 +301,15 @@ def audit_batch(run_id, source_commit, start, size):
 @app.function(
     image=image, volumes={"/artifacts": VOLUME}, cpu=2, memory=8192, timeout=600
 )
-def summarize(run_id):
+def summarize(run_id, previous_run=""):
     from resources_servers.spreadsheet.packaging.prepare_dataset import REVISION
 
     run = Path("/artifacts/audit-runs") / run_id
+    if previous_run:
+        from resources_servers.spreadsheet.packaging.recovery_cohort import summarize_cohort
+        result = summarize_cohort(run)
+        VOLUME.commit()
+        return result
     subprocess_run(
         [
             PYTHON,
@@ -320,6 +335,7 @@ def main(
     run_id: str = "",
     limit: int = 0,
     batch_size: int = 50,
+    previous_run: str = "",
 ):
     import re
     import subprocess
@@ -345,7 +361,7 @@ def main(
         "workers": 8,
     }
     (output / "run-started.json").write_text(json.dumps(started, indent=2) + "\n")
-    identity = prepare_inputs.remote(run_id, source_commit, limit, batch_size)
+    identity = prepare_inputs.remote(run_id, source_commit, limit, batch_size, previous_run)
     inputs = [
         (run_id, source_commit, start, min(batch_size, identity["tasks"] - start))
         for start in range(0, identity["tasks"], batch_size)
@@ -365,15 +381,14 @@ def main(
             flush=True,
         )
         (output / "progress.json").write_text(json.dumps(receipts, indent=2) + "\n")
-    result = summarize.remote(run_id)
+    result = summarize.remote(run_id, previous_run)
     result["modal_app_id"] = app.app_id
     result["worker_task_ids"] = sorted({r["task_id"] for r in receipts if r["task_id"]})
     (output / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
-    for name in (
-        "rejected.audit.jsonl",
-        "recovered.manifest.jsonl",
-        "regression-tests.log",
-    ):
+    names = ("candidate.audit.jsonl", "regression-tests.log") if previous_run else (
+        "rejected.audit.jsonl", "recovered.manifest.jsonl", "regression-tests.log"
+    )
+    for name in names:
         content = b"".join(VOLUME.read_file(f"audit-runs/{run_id}/{name}"))
         (output / name).write_bytes(content)
     print(

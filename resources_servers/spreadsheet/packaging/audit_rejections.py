@@ -265,6 +265,8 @@ def audit_task(task, archive, baseline, engine, root):
     started = time.monotonic()
     original_bytes = archive.read(task["thread"] + "/target.xlsx")
     record["oracle_sha256"] = hashlib.sha256(original_bytes).hexdigest()
+    if task.get("previous_oracle_sha256", record["oracle_sha256"]) != record["oracle_sha256"]:
+        raise RuntimeError("Oracle differs from pinned previous audit")
     with tempfile.TemporaryDirectory(prefix="task-", dir=root) as folder:
         temporary = Path(folder)
         oracle = temporary / "original.xlsx"
@@ -277,7 +279,24 @@ def audit_task(task, archive, baseline, engine, root):
             attempt = {"index": index}
             stage = "recalculate"
             try:
-                engine.recalculate(actual)
+                try:
+                    calculation = engine.recalculate(actual)
+                    if calculation:
+                        attempt.update(calculation)
+                except Exception as first_error:
+                    # Retry only the preidentified timeout cohort, from pristine
+                    # bytes after the engine has killed its failed worker.
+                    if task.get("candidate_group") != "libreoffice_timeout" or "timed out" not in str(first_error):
+                        raise
+                    attempt["initial_timeout"] = True
+                    previous_timeout = engine.timeout
+                    engine.timeout = 600
+                    try:
+                        actual.write_bytes(original_bytes)
+                        engine.recalculate(actual)
+                        attempt["required_timeout_seconds"] = 600
+                    finally:
+                        engine.timeout = previous_timeout
                 last_actual = actual
             except Exception as error:
                 attempt.update(error_stage=stage, error_chain=exception_chain(error))
@@ -336,6 +355,38 @@ def audit_task(task, archive, baseline, engine, root):
                 record["seed_sha256"] = hashlib.sha256(
                     archive.read(task["thread"] + "/output.xlsx")
                 ).hexdigest()
+        if task.get("candidate_group"):
+            from resources_servers.spreadsheet.service.workbook import answer_regions, load
+            from resources_servers.spreadsheet.packaging.recovery_cohort import negative_control, seed_roundtrip
+
+            book = None
+            try:
+                book = load(oracle, values=True, read_only=True)
+                record["canonical_regions"] = [
+                    {"sheet": ws.title, "bounds": bounds}
+                    for ws, bounds in answer_regions(book, task["answer_position"])
+                ]
+            except Exception as error:
+                record["metadata_error"] = exception_chain(error)
+            finally:
+                if book is not None:
+                    book.close()
+            if record["strict_qualified"]:
+                if "native_roundtrip" not in record:
+                    record["native_roundtrip"] = tool_roundtrip(
+                        last_actual, oracle, task["answer_position"], engine, temporary
+                    )
+                try:
+                    record["negative_control"] = negative_control(
+                        oracle, last_actual, task["answer_position"], temporary / "wrong.xlsx"
+                    )
+                except Exception as error:
+                    record["negative_control"] = {"passed": False, "error": exception_chain(error)}
+                seed = temporary / "seed.xlsx"
+                seed_bytes = archive.read(task["thread"] + "/output.xlsx")
+                seed.write_bytes(seed_bytes)
+                record["seed_sha256"] = hashlib.sha256(seed_bytes).hexdigest()
+                record["seed_roundtrip"] = seed_roundtrip(seed, engine)
         if sha(oracle) != record["oracle_sha256"]:
             raise RuntimeError("Immutable oracle changed")
     if record["baseline_qualified"]:
@@ -359,6 +410,11 @@ def audit_task(task, archive, baseline, engine, root):
             if counts
             else "unresolved_error"
         )
+    if task.get("candidate_group") and record["strict_qualified"]:
+        record["verdict"] = "recovered_strict" if all(
+            record.get(gate, {}).get("passed")
+            for gate in ("native_roundtrip", "seed_roundtrip", "negative_control")
+        ) else "recovered_scoring_only"
     record["seconds"] = round(time.monotonic() - started, 3)
     return record
 

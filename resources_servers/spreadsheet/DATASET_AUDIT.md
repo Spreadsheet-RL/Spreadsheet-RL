@@ -86,3 +86,38 @@ or public source bundles.
 Focused Linux regressions: **15 passed, 1 skipped**; full local integration suite:
 **104 passed, 7 skipped** using the existing cached environment. The Linux audit
 itself ran real LibreOffice recalculations. Changed-file Ruff checks passed.
+
+## Reproducing the 125-task follow-up
+
+The follow-up pins candidate membership to the completed audit above: 69 parser,
+22 sheet-resolution, 10 range-budget, three timeout and 21 native-reader tasks.
+It rechecks all 8,647 tasks to compare the same 7,685 baseline IDs. New private
+`candidate.audit.jsonl` and `summary.json` reports are diagnostic only; this mode
+exports no training rows and does not modify a service or active dataset.
+
+Use the existing Modal CLI environment, from the repository root, after committing
+and verifying a clean source tree:
+
+```bash
+modal run --profile kieusontung8 \
+  resources_servers/spreadsheet/packaging/modal_audit_dataset.py \
+  --source-commit "$(git rev-parse HEAD)" \
+  --run-id "recovery-125-$(git rev-parse --short=12 HEAD)" \
+  --previous-run strict-recovery-f86fbf2c98db \
+  --output-dir /path/to/private-audit-output
+```
+
+The batch function is capped at eight CPU containers. It reuses the locked runtime
+and dataset on the existing Volume. Each candidate must pass two recalculations,
+a native editing roundtrip, seed cell/formula preservation and a wrong-answer
+negative control. Oracle hashes must match the previous run. Only previously
+identified timeout tasks may retry from pristine bytes with a fresh worker and a
+600-second budget; any recovery requiring that budget is recorded explicitly.
+
+The metadata repair operates on the workbook being recalculated, before/after
+LibreOffice, without looking at task IDs or the oracle. It replaces only an
+invalid exported filter/validation/merge subtree with its schema-valid input
+counterpart. Worksheet cells and formulas remain byte-for-byte as exported;
+other ZIP parts remain unchanged. Valid exports and malformed input metadata are
+left untouched. Pivot caches and unsupported chart structures are not guessed.
+The value comparator and rounding rules are unchanged.

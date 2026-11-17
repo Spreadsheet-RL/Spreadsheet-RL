@@ -82,6 +82,9 @@ class LibreOfficePool:
         return process
 
     def recalculate(self, path: Path):
+        from .ooxml_metadata import capture, restore
+
+        metadata = capture(path)
         try:
             slot = self.slots.get(timeout=self.timeout)
         except queue.Empty:
@@ -93,6 +96,7 @@ class LibreOfficePool:
             process.stdin.write(json.dumps({"path": str(path.resolve())}) + "\n")
             process.stdin.flush()
             self._read(process, deadline)
+            return {"metadata_repairs": restore(path, metadata)}
         except Exception as exc:
             terminate(process or self.processes.get(slot))
             self.processes.pop(slot, None)

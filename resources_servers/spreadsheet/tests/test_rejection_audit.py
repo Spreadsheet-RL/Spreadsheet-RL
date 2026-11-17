@@ -91,3 +91,21 @@ def test_audit_marks_new_reader_regressions_instead_of_promoting_them(tmp_path):
         )
     assert record["verdict"] == "strict_regression"
     assert record["baseline_qualified"] and not record["strict_qualified"]
+
+
+def test_negative_control_rejects_changed_answer_and_seed_roundtrip_preserves_cells(tmp_path):
+    openpyxl = pytest.importorskip('openpyxl')
+    from resources_servers.spreadsheet.packaging.recovery_cohort import negative_control, seed_roundtrip
+
+    oracle, actual = tmp_path / 'oracle.xlsx', tmp_path / 'actual.xlsx'
+    wb = openpyxl.Workbook()
+    wb.active.title = 'Result'
+    wb.active['B2'] = 42
+    wb.save(oracle)
+    wb.save(actual)
+    wb.close()
+    before = oracle.read_bytes()
+    result = negative_control(oracle, actual, 'Result!B2:C4', tmp_path / 'wrong.xlsx')
+    assert result == {'passed': True, 'reward': 0}
+    assert seed_roundtrip(actual, SimpleNamespace(recalculate=lambda path: None))['passed']
+    assert oracle.read_bytes() == before

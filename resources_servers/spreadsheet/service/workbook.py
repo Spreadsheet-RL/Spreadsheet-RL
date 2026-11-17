@@ -427,8 +427,21 @@ def normalize(value, epoch=None):
 def answer_regions(workbook, answer_position):
     """Trusted task metadata has a separate range count and aggregate cell budget."""
     regions, cells = [], 0
-    for address in split_ranges(answer_position, max_ranges=MAX_ANSWER_RANGES):
-        worksheet, bounds = resolve(workbook, address)
+    from .answer_metadata import (
+        _cell_range_boundaries,
+        _resolve_sheet_name,
+        parse_answer_position,
+    )
+
+    parsed = parse_answer_position(answer_position, default_sheet_name=workbook.sheetnames[0])
+    if len(parsed) > MAX_ANSWER_RANGES:
+        raise ToolError(f"At most {MAX_ANSWER_RANGES} answer ranges")
+    for name, address in parsed:
+        name = _resolve_sheet_name(workbook, name)
+        if name is None:
+            raise ToolError("Worksheet does not exist")
+        worksheet = workbook[name]
+        bounds = _cell_range_boundaries(address, max_row_hint=max(1, int(worksheet.max_row or 1)))
         left, top, right, bottom = bounds
         cells += (right - left + 1) * (bottom - top + 1)
         if cells > MAX_ANSWER_CELLS:
@@ -446,6 +459,8 @@ def cell_equal(a, b, expected_epoch=None, produced_epoch=None):
 
 
 def compare(oracle: Path, actual: Path, answer_position: str):
+    from .answer_metadata import _resolve_sheet_name
+
     expected = load(oracle, values=True, read_only=True)
     produced = None
     matched = total = 0
@@ -454,7 +469,8 @@ def compare(oracle: Path, actual: Path, answer_position: str):
         for ws, (left, top, right, bottom) in answer_regions(expected, answer_position):
             width = right - left + 1
             total += width * (bottom - top + 1)
-            if ws.title not in produced.sheetnames:
+            actual_title = _resolve_sheet_name(produced, ws.title)
+            if actual_title is None:
                 continue
             bounds = dict(
                 min_row=top,
@@ -464,7 +480,7 @@ def compare(oracle: Path, actual: Path, answer_position: str):
                 values_only=True,
             )
             original_rows = iter(ws.iter_rows(**bounds))
-            actual_rows = iter(produced[ws.title].iter_rows(**bounds))
+            actual_rows = iter(produced[actual_title].iter_rows(**bounds))
             empty = (None,) * width
             for _ in range(top, bottom + 1):
                 originals, actuals = (
