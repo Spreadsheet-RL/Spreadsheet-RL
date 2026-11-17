@@ -1,0 +1,114 @@
+{
+  "source_repository": "sontungkieu/ordures_ultra_v3_gym",
+  "source_head": "d2a9506fe1dfb3f8459c7795f790861c663e7646",
+  "upstream_repository": "Spreadsheet-RL/Spreadsheet-RL",
+  "upstream_base": "389be8c29fed059e3b2072741c8231e86d1dee8b",
+  "imported_files": 61,
+  "byte_identical": true,
+  "commits": [
+    {
+      "original": "6a14b75f827c3f85353bd2ede2c784d91eacb649",
+      "imported": "00fda6bee66b2ac5bf3bffe9775a8268b59c5a3a"
+    },
+    {
+      "original": "99a40a22f810e0eac99c458a31b7ebd431dcaec7",
+      "imported": "da8814598d3929e98443ca97ccd9f92367010210"
+    },
+    {
+      "original": "5552cfc40387da8ceb17b87c5f4829c94b7ea94b",
+      "imported": "fad56232029446088b21405a612fb5c2f4a98e55"
+    },
+    {
+      "original": "afc48c1d0d759351e7499810322cfa9bafe6b29b",
+      "imported": "af474dce1a6f6c8455cf24df1afaaae8d622a7a2"
+    },
+    {
+      "original": "d74249d61bb474cd0598477dc3d4807d0dd0f5dd",
+      "imported": "250e728f0ae92b5064dc61ea7dacb9a25ef8aa3d"
+    },
+    {
+      "original": "9dcc7e1aef517af8da352fcb7a56cf5baba28e1d",
+      "imported": "116ac5ca99a6c12a7b11c416267d3b0ce1a62bcf"
+    },
+    {
+      "original": "ed3c92b4722bd24bafdf10c1c4f32599afc98737",
+      "imported": "d4df7879a7cf8366f4a66e99c6544376e974fe8c"
+    },
+    {
+      "original": "24a43068417bceb2e636bbb343ebbd88d11a7a06",
+      "imported": "af297214123d61425c6ba31b0586a04f7289fbbf"
+    },
+    {
+      "original": "65b2f3483e78e4831ee6dc45dd5cf7bc10752034",
+      "imported": "111eff5243f97358ed913709edfb690b7b480864"
+    },
+    {
+      "original": "b7475a1d0cae93208690ee328ba9f1ebcf2fef63",
+      "imported": "6c4237a18fc4b63f037889bbf778832aca6731c0"
+    },
+    {
+      "original": "78e36419952e85637f2a6a6b9f44f581f35c279d",
+      "imported": "149c5633812c05fdf1999014b45c9c70d31c3e0f"
+    },
+    {
+      "original": "db7c8613157d70a595adb90a5116e0f47cbf3327",
+      "imported": "e949248400227f273ba13766bcfaf992a52a8249"
+    },
+    {
+      "original": "e476d48ed9191e021e54cb701706a81a64cbb64f",
+      "imported": "be1766cf3d0b8da8f74af834b399eef1a071e6f7"
+    },
+    {
+      "original": "fbf23019aadecc4f9d8c8597ee837dded60999cb",
+      "imported": "d2acad1d78a1f3e641015e01cd12afa851167abb"
+    },
+    {
+      "original": "5babe29a7e7563376df400a9f53dd7597fae61ec",
+      "imported": "d8b8bf7a672da1346b245726938f33e3078d32e8"
+    },
+    {
+      "original": "d9c41c889214785c9bb4af309990fbfcdf65d473",
+      "imported": "6564b695ca7c26f867b6ed523324a385b7efb3ab"
+    },
+    {
+      "original": "869b80b81270a793b58560a7824528b0e68d6659",
+      "imported": "eec0a43b5b31dbc0e9922a92131b7837d3244b99"
+    },
+    {
+      "original": "9811a5177507b09b14590c3c58477cd79fc655f6",
+      "imported": "d0621b9c0aaf7983a9f4b395c020da888efc0269"
+    },
+    {
+      "original": "3e536cae8dfa74805da4dfd33a9874e570e7fd80",
+      "imported": "6327137ad5c531577056ac10adb35e34ab4948b5"
+    },
+    {
+      "original": "af09587d75f9d1a0099a3038b967cb179d2a33ef",
+      "imported": "9a068b41b69905363df18658db7afbb53f301914"
+    },
+    {
+      "original": "d797aa2fb36d576e84799c6cc36b9a392d0c828e",
+      "imported": "453d587439912d2c44ab4bbe3bffa15239c38008"
+    },
+    {
+      "original": "d20ee243acdc25b0d382e2b743c7aff70c3a5e6b",
+      "imported": "4a0392d7b66b63cb0ea57ab44a3ab409728b571e"
+    },
+    {
+      "original": "fecd754e0fbf2f36e57d61a04427d4345e3db42d",
+      "imported": "dff8d0643247e29bc7b78e872c71628defd1cc0c"
+    },
+    {
+      "original": "aa4cf4d31d103487eb770afbb7f1b0e909e904b0",
+      "imported": "22e29a76073694c02b3c12a9cd7589352ff0bb25"
+    },
+    {
+      "original": "b273a7e5a3dcc761667e4443a83021f3646c3283",
+      "imported": "53cd63141af0c74ec3f9056c61fffbdf8578ec89"
+    },
+    {
+      "original": "d2a9506fe1dfb3f8459c7795f790861c663e7646",
+      "imported": "d235dab154391547dc6c98dbe88ff69bbce3c527"
+    }
+  ]
+}

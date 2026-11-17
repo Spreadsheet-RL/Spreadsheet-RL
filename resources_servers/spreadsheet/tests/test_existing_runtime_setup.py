@@ -1,5 +1,6 @@
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -8,6 +9,7 @@ from pathlib import Path
 
 import pytest
 
+from resources_servers.spreadsheet.packaging import install_gym_integration as overlay
 from resources_servers.spreadsheet.packaging import prepare_training_node as setup
 from resources_servers.spreadsheet.packaging import start_service
 from resources_servers.spreadsheet.schemas import TOOL_MODELS
@@ -81,11 +83,23 @@ def test_cache_helper_does_not_overwrite_an_existing_log(tmp_path):
     assert log.read_text() == "original fixture evidence"
 
 
-def test_actual_cached_runtime_imports_the_spreadsheet_frontends():
+def test_actual_cached_runtime_imports_the_spreadsheet_frontends(tmp_path):
     gym_root = Path(__file__).resolve().parents[3]
     venv = Path(sys.prefix)
     if not (venv / "bin/activate").is_file():
         pytest.skip("Existing activated venv is required for this import probe")
+    if not (gym_root / "nemo_gym/base_resources_server.py").is_file():
+        # The standalone fork is an overlay, not a full Gym checkout. Install
+        # it into an isolated copy of the available real Gym source for probing.
+        gym = pytest.importorskip("nemo_gym")
+        from responses_api_agents.simple_agent import app as simple_agent
+
+        source = gym_root
+        gym_root = tmp_path / "Gym"
+        ignore = shutil.ignore_patterns("__pycache__", "*.pyc", ".venv", "cache", "results")
+        shutil.copytree(Path(gym.__file__).parent, gym_root / "nemo_gym", ignore=ignore)
+        shutil.copytree(Path(simple_agent.__file__).parent, gym_root / "responses_api_agents/simple_agent", ignore=ignore)
+        overlay.install(source, gym_root)
     for name in ("resources_servers.spreadsheet.app", "responses_api_agents.spreadsheet_agent.app"):
         result = setup.probe_venv(venv, gym_root, name)
         assert result["ok"]

@@ -2,6 +2,12 @@
 
 Development branch: `tungks/feat/tool/spreadsheet-rl`.
 
+Start with [SETUP.md](../SETUP.md) for the service/trainer split and
+the runtime reproducibility contract. `runtime.lock.json` pins the published
+dependency artifact. `modal_reproduce.py` checks two independent offline Ubuntu
+installs, sandbox reconstruction, package/content fingerprints and real canaries;
+the worker logic is in `verify_runtime.py`. No runtime is installed on the Mac.
+
 Terminal commands should download an immutable release, verify its checksum, and
 invoke these files with node-specific paths. Keep conversion, contract checks,
 source installation and YAML edits in the versioned scripts. Operator-specific
@@ -17,7 +23,7 @@ paths and private keys stay outside public release artifacts.
 | `prepare_cached_frontends.py` | `--venv-root`, `--expected-hostname`, `--receipt` | Copy the existing `math_with_judge` and `simple_agent` caches for the two new frontends; no installs or venv aliases |
 | `prepare_project_runtime.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--runtime-root`, `--qualified-dir`, `--output-dir`, `--private-config`, `--expected-hostname` | Prepare project-local caches and an inherited YAML; verify existing integration/data without modifying their files |
 | `check_live_service.py` | `--private-config`, `--dataset`, `--manifest`, `--data-root`, fresh `--output-dir`, `--expected-hostname` | Trusted HTTP canary covering all 12 tools, isolation, recalc, replay and reward; separate from model rollouts |
-| `smoke_training.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--run-dir`, short fresh `--ray-root`, `--private-config`, `--expected-hostname` | Two optimizer steps with two prompts and two generations each; existing weights/actor venvs, separate logs, disabled checkpoints and external logging |
+| `smoke_training.sh` | `TRAINER_ROOT NLTK_DATA`, then `--base-config`, `--run-dir`, short fresh `--ipc-root`, `--private-config`, `--expected-hostname` | Two optimizer steps with two prompts and two generations each; existing weights/actor venvs, separate logs, disabled checkpoints and external logging |
 | `build_source_bundle.py` | Clean source checkout; `--output-dir` outside it | Small source archive and checksum, pinned to the exact Git commit |
 
 Conversion, source installation and source packaging use only Python's standard

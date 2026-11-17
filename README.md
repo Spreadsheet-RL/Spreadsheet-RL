@@ -1,5 +1,19 @@
 # Spreadsheet-RL
 
+## Linux LibreOffice and NeMo Gym integration in this fork
+
+The `tungks/feat/tool/spreadsheet-rl` branch adds a standalone Linux spreadsheet
+service, isolated Python tools, LibreOffice rewards, and NeMo Gym adapters under
+[`resources_servers/spreadsheet`](resources_servers/spreadsheet).
+Start with the [setup guide](resources_servers/spreadsheet/SETUP.md) and
+[file-based entrypoints](resources_servers/spreadsheet/packaging/README.md).
+The locked runtime has a [two-container offline reproduction test](resources_servers/spreadsheet/packaging/modal_reproduce.py).
+The [import manifest](resources_servers/spreadsheet/IMPORTS.json) maps the 26
+integration commits from the Gym fork to this branch. Their 61 imported files
+were verified byte-for-byte before further changes. The integration retains its
+[Apache-2.0 license](resources_servers/spreadsheet/LICENSE); the upstream files
+retain the existing root license. The upstream Excel/verl workflow follows below.
+
 <p align="center">
   <img src="assets/spreadsheet-rl.png" alt="Spreadsheet-RL logo" width="700">
 </p>

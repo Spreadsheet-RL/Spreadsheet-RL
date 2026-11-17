@@ -6,6 +6,8 @@ isolated Python. The service runs in an existing **Ubuntu 24.04 x86_64 container
 the training container calls it through its reachable IP/port. There is no nested
 Docker, Kubernetes, Apptainer, model, GPU, or `verl` dependency in the service.
 
+The setup/runbook is in [SETUP.md](SETUP.md), including the pinned-runtime
+reproduction test and the distinction between smoke and full training readiness.
 The implementation plan and invariants are in [DESIGN.md](DESIGN.md). The API
 contracts are in [schemas.py](schemas.py). This is a **LibreOffice backend**, not
 a claim of reproducing Microsoft Excel benchmark scores.
@@ -28,8 +30,9 @@ The operator's pinned dataset run checked 8,647 tasks and kept 7,684 under this
 scorer: 5,282 train and 2,402 test rows. The exclusions include observed cached
 value differences and parser/reader limits; they do not all establish LibreOffice
 calculation defects. The gate checks existing oracle values, not arbitrary future
-policy formulas. Live model rollout, training throughput, and Excel reward
-equivalence remain unverified.
+policy formulas. A later NeMo Gym smoke completed two training steps and eight
+model rollouts with twelve tool calls and both reward classes; see [SETUP.md](SETUP.md).
+Full-scale training throughput and Excel reward equivalence remain unverified.
 
 Run these commands **on the service node**, using its configured company proxy:
 download and extract the runtime on node-local executable storage. Dataset files
