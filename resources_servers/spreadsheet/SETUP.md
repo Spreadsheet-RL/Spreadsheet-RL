@@ -77,6 +77,11 @@ sequence_parallel, bỏ judge không dùng và IPC path ngắn. Base YAML/launch
 train chưa được đồng bộ hết các sửa đó. Không dùng riêng việc setup/import pass
 để kết luận chạy nguyên YAML full train cũ là đã được kiểm chứng.
 
+Muốn đưa các sửa cần thiết vào chính `qwen_test.yaml` và dùng lại
+`singlenode_main.sh`, xem [EXISTING_LAUNCHER.md](EXISTING_LAUNCHER.md).
+`prepare_existing_launcher.sh` tái dùng venv/cache đã có và tạo backup cho hai
+file; không mang giới hạn smoke sang full train hoặc tự launch training.
+
 ## 4. Test reproducibility của runtime
 
 Chạy `packaging/modal_reproduce.py` bằng Modal CLI/runtime **đã có**, với profile
