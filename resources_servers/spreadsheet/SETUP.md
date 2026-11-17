@@ -9,6 +9,29 @@ Kết quả audit toàn bộ dataset, task phục hồi và giới hạn về se
 trong [DATASET_AUDIT.md](DATASET_AUDIT.md). Các export phục hồi chưa thay dữ liệu
 hoặc service đang chạy trên node công ty.
 
+## Di chuyển dataset khi service vẫn đang chạy
+
+`/health` kiểm engine/isolation, không đọc lại workbook cho mỗi request. Catalog
+giữ path seed/oracle đã resolve từ lúc khởi động; move dataset có thể làm
+`POST /sessions` trả 500 dù health vẫn ready. Không sửa bằng symlink ngầm.
+
+`packaging/relocate_live_service.py` xử lý đúng mapping đã xác định
+`/nlp/tungks/` → `/nlp/users/tungks/` cho hai field `data_root` và `manifest`.
+Script nhận launcher/bundle/catalog/report/rootfs receipt/service root, URL,
+backup dir mới, hostname và PID mong đợi qua CLI. Trước khi dừng, nó đối chiếu
+PID/command/config/catalog hash, qualification, toàn bộ workbook hash ở root mới,
+state/address/adapter keys và từ chối nếu còn job queued/running. Nó lưu backup
+config và receipt, gửi SIGTERM qua pidfd tới đúng process rồi đợi tối đa
+60 giây; không SIGKILL. Sau đó nó khởi động bằng launcher hiện có và bundle ở
+path mới, giữ nguyên state và credential files.
+
+Nếu quá hạn dừng, config chưa đổi. Nếu startup mới lỗi, config mới và PID receipt
+được giữ lại để kiểm tra hoặc chạy lại launcher; không tự khởi động config cũ
+vì dataset ở path cũ đã không còn. Backup `service.json.before` cho phép phục hồi
+config khi service đã dừng và hash hiện tại khớp `after_sha256` trong receipt;
+phục hồi config không phục hồi dataset đã move. Unit tests kiểm giới hạn hai
+field, backup/restore và chặn active jobs; restart/LO thực cần kiểm trên Linux.
+
 ## Hai instance và phần cần cài
 
 | Instance | Thành phần | Điều kiện |
