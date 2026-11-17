@@ -51,6 +51,16 @@ def test_coder_prompt_conversion_preserves_the_qualified_rows(tmp_path):
         system = converted["responses_create_params"]["input"][0]
         assert system["content"] == "Original system prompt\n\n" + FORMAT_PROMPT
         system["content"] = "Original system prompt"
+        original_fill = next(tool for tool in original["responses_create_params"]["tools"] if tool["name"] == "fill_formula")
+        converted_fill = next(tool for tool in converted["responses_create_params"]["tools"] if tool["name"] == "fill_formula")
+        assert "end_row" not in converted_fill["parameters"]["required"]
+        original_properties = original_fill["parameters"]["properties"]
+        converted_properties = converted_fill["parameters"]["properties"]
+        assert converted_properties["end_row"] == {
+            "type": "integer", "minimum": 1, "maximum": 1048576, "title": "End Row",
+        }
+        assert original_properties["end_row"]["default"] is None
+        converted_properties["end_row"] = original_properties["end_row"]
         assert converted == original
         assert receipt["splits"][split]["rows"] == 1
     with pytest.raises(FileExistsError):

@@ -110,12 +110,15 @@ next to the existing qualified dataset:
 python3 convert_coder_prompts.py \
   --input-dir /path/to/prepared/nemo_gym \
   --manifest /path/to/prepared/libreoffice/manifest.qualified.jsonl \
-  --output-dir /path/to/prepared/nemo_gym_qwen3_coder_v1
+  --output-dir /path/to/prepared/nemo_gym_qwen3_coder_v2
 ```
 
 The converter adds the Coder call syntax to the Spreadsheet system message and
-checks that both splits cover the original manifest exactly. It keeps all other
-row fields and writes a separate pair of JSONL files with checksum receipts.
+advertises `fill_formula.end_row` as an optional integer with its bounds at the
+property level. Callers can omit it. This lets legacy Coder parsers read the type
+without inspecting nullable `anyOf` branches. The converter keeps all other row
+fields and checks both splits against the original manifest before writing a
+separate pair of JSONL files with checksum receipts.
 This step requires only Python on CPU. A rollout smoke must confirm that the
 checkpoint follows the example and that the server returns structured
 `function_call` and `function_call_output` entries.

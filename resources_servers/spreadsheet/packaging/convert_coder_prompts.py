@@ -39,6 +39,21 @@ def digest(path):
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
+def coder_tool_schema(tool):
+    if tool["name"] != "fill_formula":
+        return tool
+    parameters = tool["parameters"]
+    properties = parameters["properties"]
+    end_row = properties["end_row"]
+    branches = {branch["type"]: branch for branch in end_row["anyOf"]}
+    if branches.keys() != {"integer", "null"} or "end_row" in parameters.get("required", []):
+        raise ValueError("Expected an optional nullable integer for fill_formula.end_row")
+    # The legacy Coder parser only reads the property's top-level type.
+    typed_end_row = {key: value for key, value in end_row.items() if key not in ("anyOf", "default")}
+    typed_end_row.update(branches["integer"])
+    return dict(tool, parameters=dict(parameters, properties=dict(properties, end_row=typed_end_row)))
+
+
 def convert_row(row):
     if row.get("agent_ref") != {"name": "spreadsheet_agent", "type": "responses_api_agents"}:
         raise ValueError("Expected a Spreadsheet Gym row")
@@ -51,8 +66,9 @@ def convert_row(row):
         raise ValueError("Input already contains the Coder prompt")
     if not any(tool.get("name") == "inspect_range" for tool in request["tools"]):
         raise ValueError("The example tool is missing from this row")
+    tools = [coder_tool_schema(tool) for tool in request["tools"]]
     updated = dict(system, content=system["content"].rstrip("\n") + "\n\n" + FORMAT_PROMPT)
-    return dict(row, responses_create_params=dict(request, input=[updated, *messages[1:]]))
+    return dict(row, responses_create_params=dict(request, input=[updated, *messages[1:]], tools=tools))
 
 
 def convert(source_dir, manifest, output_dir):
@@ -65,7 +81,7 @@ def convert(source_dir, manifest, output_dir):
             raise ValueError("Expected a unique qualified manifest entry for each task")
         qualified[task_id] = entry["dataset_revision"]
     manifest_hash = digest(manifest)
-    receipt = {"prompt_variant": "qwen3_coder_v1", "manifest_sha256": manifest_hash, "splits": {}}
+    receipt = {"prompt_variant": "qwen3_coder_v2", "manifest_sha256": manifest_hash, "splits": {}}
     seen = set()
     with tempfile.TemporaryDirectory(prefix=".coder-prompts-", dir=output_dir.parent) as folder:
         stage = Path(folder)
