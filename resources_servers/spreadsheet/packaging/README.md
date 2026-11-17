@@ -50,6 +50,21 @@ reports and formulas stay in the private Modal Volume and local audit directory,
 outside public source bundles and policy observations. The worker implementation
 is `audit_rejections.py`; `--limit` is available for partial diagnostic runs.
 
+`audit_selection.py --tasks TASKS.jsonl --rejected rejected.audit.jsonl
+--summary summary.json --output NEW_COVERAGE.json` reports retention by split,
+task source and answer-range count. It validates ID uniqueness and audit totals.
+Zero regressions establishes preservation on the observed baseline pass cohort;
+it does not establish absence of selection bias. Keep strict and any future
+LibreOffice compatibility scores separate. Calibrate a new value policy on train
+only and freeze it before held-out evaluation; never tune task-specific rules
+against oracle answers. The current audit does not relax numeric equality.
+
+`modal_inspect_dependencies.py` reads raw original/recalculated OOXML using the
+already-built runtime image selected by `SPREADSHEET_AUDIT_BASE_IMAGE`. It records
+date/random-function hints, external-link parts and invalid filter metadata,
+without normalizing the oracle or silently removing workbook features. These
+private diagnostics distinguish volatile dependencies from engine differences.
+
 | Entrypoint | Required inputs | Result |
 | --- | --- | --- |
 | `convert_training_data.py` | `--input-dir` containing both qualified JSONL files; `--output-dir` | Routed `train.jsonl` / `test.jsonl`, conversion hashes and a separate run receipt |
