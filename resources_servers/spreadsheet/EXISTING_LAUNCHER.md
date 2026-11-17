@@ -41,6 +41,20 @@ vai trò train/rollout vào từng index vật lý.
 
 ## Lệnh chuẩn bị một lần
 
+Sau khi di chuyển source hoặc cache, dùng `packaging/inspect_relocated_runtime.py`
+trước bước chuẩn bị. Script chạy bằng Python hệ thống (chỉ stdlib), nhận
+`--trainer-root`, `--config`, `--smoke-config`, `--cache-root` và
+`--expected-hostname`. Nó đọc path/metadata và thử trực tiếp Python trong ba Gym
+venv, không source shell script, cài package hay khởi tạo Ray/CUDA. Báo cáo phân
+biệt `sys.prefix` hiện tại với `VIRTUAL_ENV` lưu trong `bin/activate`; hai giá trị
+có thể lệch sau khi move. Các field YAML trong báo cáo là giá trị khai báo trực
+tiếp, chưa resolve `defaults`/interpolation. Đường dẫn cache truyền vào là vị trí
+cần kiểm tra, không phải đường dẫn đã được xác nhận. Script không tự sửa file.
+
+Giữ model và cấu hình hiện tại của người dùng khi cập nhật path. Smoke Qwen3-4B
+trước đây không xác nhận cấu hình Qwen3-32B mới; cần kiểm tra runtime, parallel
+sizes và chạy lại trên cấu hình mới sau khi xử lý xong relocation.
+
 Checkout branch `tungks/feat/tool/spreadsheet-rl` của
 `https://github.com/sontungkieu/Spreadsheet-RL` vào `spreadsheet_source` bên dưới.
 Các đường dẫn là từ lần setup/smoke đã kiểm chứng; helper sẽ đọc lại files, cache
