@@ -17,7 +17,8 @@ from .errors import ToolError
 MAX_CELLS = 100_000
 MAX_RETURN = 400
 MAX_ANSWER_RANGES = 4096
-MAX_ANSWER_CELLS = 1_000_000
+# Preserve the old maximum of 20 ranges * 100,000 cells while bounding metadata.
+MAX_ANSWER_CELLS = 2_000_000
 
 
 def check_archive(path: Path, max_bytes: int = 100 * 1024 * 1024) -> None:

@@ -33,7 +33,7 @@ modal run --profile PROFILE resources_servers/spreadsheet/packaging/modal_audit_
 
 The baseline reader is loaded from the original source inside the locked bundle.
 The new scorer streams values, supports up to 4,096 metadata ranges and a total
-of one million answer cells; per-range and public tool limits remain bounded.
+of two million answer cells; per-range and public tool limits remain bounded.
 Original exact/normalized cell equality is preserved, including the two-decimal
 rounding boundary. Numeric precision candidates are diagnostic labels only.
 

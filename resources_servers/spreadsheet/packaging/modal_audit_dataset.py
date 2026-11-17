@@ -94,6 +94,7 @@ def bootstrap_runtime(artifact):
 
 image = (
     modal.Image.from_registry(LOCK["base_image"], add_python="3.12")
+    .add_local_file(HERE / "runtime.lock.json", "/source/resources_servers/spreadsheet/packaging/runtime.lock.json", copy=True)
     .run_function(
         bootstrap_runtime,
         args=(LOCK["artifact"],),
