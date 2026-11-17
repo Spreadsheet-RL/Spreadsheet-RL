@@ -5,11 +5,11 @@ import os
 
 from fastapi import Request
 
-from responses_api_agents.simple_agent.app import SimpleAgentConfig, SimpleAgentRunRequest, SimpleAgentVerifyResponse
-from responses_api_agents.spreadsheet_agent.app import SpreadsheetAgent
+from responses_api_agents.simple_agent.app import SimpleAgentRunRequest, SimpleAgentVerifyResponse
+from responses_api_agents.spreadsheet_agent.app import SpreadsheetAgent, SpreadsheetAgentConfig
 
 
-class AuditConfig(SimpleAgentConfig):
+class AuditConfig(SpreadsheetAgentConfig):
     audit_path: str
 
 

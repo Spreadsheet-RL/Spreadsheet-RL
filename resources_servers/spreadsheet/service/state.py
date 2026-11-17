@@ -25,7 +25,7 @@ from .errors import ConflictError, EnvironmentError, ToolError
 
 
 class Store:
-    def __init__(self, root: Path, catalog, engine, python_runner, workers: int = 8, max_pending: int = 256):
+    def __init__(self, root: Path, catalog, engine, python_runner, workers: int = 8, max_pending: int = 4000):
         self.root, self.catalog, self.engine, self.python_runner = root.resolve(), catalog, engine, python_runner
         self.max_pending = max_pending
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)

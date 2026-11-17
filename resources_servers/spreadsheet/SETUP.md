@@ -9,6 +9,24 @@ Kết quả audit toàn bộ dataset, task phục hồi và giới hạn về se
 trong [DATASET_AUDIT.md](DATASET_AUDIT.md). Các export phục hồi chưa thay dữ liệu
 hoặc service đang chạy trên node công ty.
 
+## Cập nhật source service và queue mà không dựng lại runtime
+
+`packaging/deploy_service_update.py` chỉ thay ba file `app.py`, `state.py`,
+`workbook.py` trong source overlay mới. `PATCH.json` phải pin hash của cả file
+hiện tại và file cập nhật. Chế độ mặc định chỉ preflight; `--apply` kiểm đúng
+hostname/PID/config/catalog, không còn session OPEN hay job chờ/chạy, rồi backup
+config/launch receipt, gửi SIGTERM qua pidfd và khởi động source mới bằng Python
+venv hiện có. Queue service thành 4000; worker count, catalog, state, credential,
+dependency và runtime VAI/SH giữ nguyên. `/health.max_pending` xác nhận queue.
+
+Nếu source mới không ready, script dừng đúng process mới và phục hồi config,
+source cũ cùng launch receipt có PID mới. Không dùng SIGKILL; log và deployment
+receipt nằm trong thư mục `update-<commit>-<uuid>` dưới service root. Script có
+test hash/allowlist, chặn active jobs, và phục hồi nguyên byte/mode config.
+Nếu Bridge không cho ghi service root dưới `/opt`, phải chạy `--apply` trực tiếp
+trong terminal service; không bọc script để vượt scope Bridge. Frontend agent
+và config Spreadsheet có thể cập nhật riêng qua Bridge dưới đúng Gym writeRoot.
+
 ## Di chuyển dataset khi service vẫn đang chạy
 
 `/health` kiểm engine/isolation, không đọc lại workbook cho mỗi request. Catalog

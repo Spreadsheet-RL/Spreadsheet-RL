@@ -13,7 +13,7 @@ from typing import List
 from uuid import uuid4
 
 from fastapi import HTTPException, Request, Response
-from pydantic import Field, ValidationError
+from pydantic import Field, PrivateAttr, ValidationError
 
 from nemo_gym.base_responses_api_agent import Body
 from nemo_gym.openai_utils import (
@@ -35,9 +35,36 @@ from responses_api_agents.simple_agent.app import (
 )
 
 
+class SpreadsheetAgentConfig(SimpleAgentConfig):
+    max_pending_responses: int = Field(default=4000, ge=1, le=10000)
+    max_concurrent_responses: int = Field(default=32, ge=1, le=1024)
+    completed_response_cache_size: int = Field(default=4000, ge=1, le=10000)
+    completed_response_ttl_seconds: float = Field(default=300, gt=0)
+
+
 class SpreadsheetAgent(SimpleAgent):
-    config: SimpleAgentConfig
+    config: SpreadsheetAgentConfig
     response_tasks: dict = Field(default_factory=dict, exclude=True)
+    response_completed_at: dict = Field(default_factory=dict, exclude=True)
+    _response_slots: asyncio.Semaphore | None = PrivateAttr(default=None)
+
+    def _prune_responses(self):
+        now = time.monotonic()
+        for key, completed in list(self.response_completed_at.items()):
+            if (
+                now - completed > self.config.completed_response_ttl_seconds
+                or len(self.response_completed_at) > self.config.completed_response_cache_size
+            ):
+                self.response_completed_at.pop(key)
+                self.response_tasks.pop(key, None)
+
+    def _response_finished(self, key, task):
+        # A disconnected HTTP caller must not leave a shielded task exception
+        # unobserved. Reading it here does not hide it from subsequent awaiters.
+        if not task.cancelled():
+            task.exception()
+        self.response_completed_at[key] = time.monotonic()
+        self._prune_responses()
 
     async def responses(
         self, request: Request, response: Response, body: NeMoGymResponseCreateParamsNonStreaming = Body()
@@ -46,28 +73,31 @@ class SpreadsheetAgent(SimpleAgent):
         if not cookie_values:
             raise HTTPException(409, "Spreadsheet session cookie is missing")
         key = hashlib.sha256(json.dumps([cookie_values, body.model_dump()], sort_keys=True).encode()).hexdigest()
-        now = time.monotonic()
-        for old_key, (created, task) in list(self.response_tasks.items()):
-            if task.done() and now - created > 300:
-                self.response_tasks.pop(old_key)
+        self._prune_responses()
         if key not in self.response_tasks:
-            if len(self.response_tasks) >= 128:
-                raise HTTPException(503, "Spreadsheet agent response cache is full")
+            pending = sum(not task.done() for _, task in self.response_tasks.values())
+            if pending >= self.config.max_pending_responses:
+                raise HTTPException(503, "Spreadsheet agent pending response queue is full")
+            if self._response_slots is None:
+                self._response_slots = asyncio.Semaphore(self.config.max_concurrent_responses)
             execution_id = uuid4().hex
 
             async def perform():
-                claimed = await self.server_client.post(
-                    server_name=self.config.resources_server.name,
-                    url_path="/begin_execution",
-                    json={"execution_id": execution_id},
-                    cookies=request.cookies,
-                )
-                await raise_for_status(claimed)
-                output_response = Response()
-                result = await self._responses_once(request, output_response, body)
-                return result, output_response.raw_headers
+                async with self._response_slots:
+                    claimed = await self.server_client.post(
+                        server_name=self.config.resources_server.name,
+                        url_path="/begin_execution",
+                        json={"execution_id": execution_id},
+                        cookies=request.cookies,
+                    )
+                    await raise_for_status(claimed)
+                    output_response = Response()
+                    result = await self._responses_once(request, output_response, body)
+                    return result, output_response.raw_headers
 
-            self.response_tasks[key] = (now, asyncio.create_task(perform()))
+            task = asyncio.create_task(perform())
+            self.response_tasks[key] = (time.monotonic(), task)
+            task.add_done_callback(lambda finished: self._response_finished(key, finished))
         result, headers = await asyncio.shield(self.response_tasks[key][1])
         for name, value in headers:
             if name.lower() == b"set-cookie":

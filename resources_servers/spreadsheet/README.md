@@ -83,6 +83,18 @@ preserves the `simple_agent` Responses loop, cookies, token IDs, and logprobs.
 It adds stable tool-call IDs in HTTP headers, an allowlist of tools, inference
 execution claims, and best-effort close. The existing calculator is unchanged.
 
+Spreadsheet response admission is bounded by `max_pending_responses: 4000`
+(waiting plus running inference executions). `max_concurrent_responses: 32`
+limits active executions without rejecting a normal 1,008-rollout collection.
+Completed responses have a separate 4,000-entry, 300-second retry cache; its TTL
+starts at completion, and completed entries do not consume pending queue slots.
+Retries share the original task even if their HTTP caller disconnects. The
+service's `max_pending: 4000` separately bounds queued plus running workbook
+operations; its worker count and LibreOffice pool size are unchanged. These are
+admission limits, not a claim of 4,000 simultaneous LibreOffice executions.
+Existing service JSON must explicitly receive the new `max_pending` value on
+deployment. No NeMo RL/VAI source or training shell changes are required.
+
 ## Tool interface and supported semantics
 
 | Tools | Behavior |

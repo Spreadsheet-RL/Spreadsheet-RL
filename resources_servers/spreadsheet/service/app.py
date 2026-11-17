@@ -34,7 +34,7 @@ class ServiceConfig(BaseModel):
     runtime_paths: list[str] = Field(default_factory=list)
     libreoffice_workers: int = Field(default=2, ge=1, le=16)
     job_workers: int = Field(default=8, ge=1, le=64)
-    max_pending: int = Field(default=256, ge=1, le=10000)
+    max_pending: int = Field(default=4000, ge=1, le=10000)
     recalc_timeout: int = Field(default=120, ge=1, le=600)
     python_timeout: int = Field(default=60, ge=1, le=300)
     python_memory_mb: int = Field(default=1024, ge=128, le=16384)
@@ -177,7 +177,12 @@ def create_app(config: ServiceConfig, *, store=None):
 
     @app.get("/health")
     async def health():
-        return {"status": "ready", "engine": store.engine.version, "python_isolation": config.python_isolation}
+        return {
+            "status": "ready",
+            "engine": store.engine.version,
+            "python_isolation": config.python_isolation,
+            "max_pending": config.max_pending,
+        }
 
     @app.post("/sessions", dependencies=[Depends(authenticate)])
     async def seed(body: SeedRequest):
